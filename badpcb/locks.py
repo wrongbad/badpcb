@@ -1,16 +1,20 @@
 """Lock awareness: classify existing copper and explain which locked copper blocks a connection.
 
-Classes (Track.cls / Via.cls, set by `classify`; independent of the current lock flag so that an unlocked lane is still a lane):
-  <configured classes>  copper whose uuids a project lists in badpcb.json "locks.classes" ({"lane": "lanes.json", "mimic": "mimic.json:copied"},
-                        file = JSON list of uuids or dict, optional ":key"); first match in config order wins. Conventional names:
-                        `lane` = scripted trunk copper (apply keeps it unless shorted; `trim-lanes` works on it), `mimic` = copied reference copper
+Classes (Track.cls / Via.cls, set by `classify`; independent of the current lock flag so that an unlocked item keeps its class):
+  <configured classes>  copper whose uuids a project lists in badpcb.json "locks.classes": {"name": "file[:key]"} or
+                        {"name": {"file": "f.json", "key": "k", "protect": true, "trim": true}}; file = JSON list of uuids or dict
+                        (+ key); first match in config order wins. Properties (default off):
+                          protect  apply keeps the copper unless a changed pad shorts or breaks it; legal/stubs treat it as hard copper
+                          trim     the class is eligible for `trim` (a dict here overrides the "locks.trim" parameters for this class)
   fanout  every other locked copper item (fan-out stubs, plane vias)
   free    everything else (router output): always rippable
+The package default has no configured classes.
 
 `unlock TARGET` / `lock TARGET` flip the lock flag of the matching copper (apply.py writes that to the board, so KRT may rip it);
-TARGET = class (lanes|mimic|fanout|all), a net / glob (SENSE4, EN*), a region (R8) or a box x0,y0,x1,y1.
-`trim-lanes` deletes lane segments past the last key of each lane and lane ends that sit on another net's pad/via
-(badpcb.json "locks.trim": {"nets": regex of lane nets to trim, "key_parts": regex of the refdes that count as keys, "start_part": ref a trunk starts at}).
+TARGET = class (plural accepted), a net / glob (SENSE4, EN*), a region (R8) or a box x0,y0,x1,y1.
+`trim [CLASS]` (alias `trim-lanes`) deletes, for every trim-enabled class (or just CLASS), horizontal segments past the last key of
+each chain and chain ends that sit on another net's pad/via (badpcb.json "locks.trim": {"nets": regex of nets to trim, "key_parts": regex of the
+refdes that count as keys, "start_part": ref a trunk starts at, "band_depth": mm}).
 """
 import fnmatch
 import json
@@ -22,7 +26,7 @@ from . import geom
 
 from . import config
 
-_ALIASES = {"reference": "mimic", "stubs": "fanout", "fanouts": "fanout", "locked": "all"}
+_ALIASES = {"stubs": "fanout", "fanouts": "fanout", "locked": "all"}
 
 _cache = {}
 
@@ -47,6 +51,27 @@ def class_alias(word):
     if w.endswith("s") and w[:-1] in names:
         return w[:-1]
     return _ALIASES.get(w) if _ALIASES.get(w) in names | {"all"} else None
+
+
+def protected(cl):
+    """True when lock class `cl` has the `protect` property."""
+    return bool(cl) and config.current().lock_props(cl)["protect"]
+
+
+def protected_ids(board):
+    """{uuid: class name} of the copper of protect-enabled classes."""
+    return {i.id: cls_of(i) for i in _items(board) if i.id and protected(getattr(i, "cls", ""))}
+
+
+def trim_classes(cls=None):
+    """Names of trim-enabled classes (just `cls` when given; ValueError when it is not trim-enabled)."""
+    names = [n for n, _, _ in class_specs() if config.current().lock_props(n)["trim"]]
+    if cls:
+        c = class_alias(cls)
+        if c not in names:
+            raise ValueError("trim: '%s' is not a trim-enabled lock class (%s)" % (cls, ", ".join(names) or "none configured"))
+        return [c]
+    return names
 
 
 def label(cl):
@@ -133,52 +158,58 @@ def summary(board):
     return out
 
 
-# --------------------------------------------------------------------------- lanes
-def lane_chains(board):
-    """[(net, y, [segments sorted by x])] for horizontal lane-class tracks (locked or not)."""
+# --------------------------------------------------------------------------- trim
+def trim_chains(board, cls):
+    """[(net, y, [segments sorted by x])] for horizontal tracks of lock class `cls` (locked or not)."""
     d = {}
     for t in board.tracks:
-        if cls_of(t) == "lane" and abs(t.a[1] - t.b[1]) < 1e-6:
+        if cls_of(t) == cls and abs(t.a[1] - t.b[1]) < 1e-6:
             d.setdefault((t.net, round(t.a[1], 3), t.layer), []).append(t)
     return [(k[0], k[1], sorted(v, key=lambda t: min(t.a[0], t.b[0]))) for k, v in sorted(d.items())]
 
 
-def trim_candidates(board, near=10.0):
-    """[(track, reason)] lane segments that can go.
-    1. past the last key: no pad/via of the lane's net within `near` mm (vertically) at or beyond the segment start -> the
-       segment runs on past the last key it serves (the lane ends are made `1.5 mm` longer than the extreme key);
-    2. ends on another net's pad/via (within clearance): the lane end blocks that pad's escape (what prune_copper removes)."""
-    rl = board.rules
+def trim_candidates(board, cls=None, near=10.0):
+    """[(track, reason)] segments of the trim-enabled classes (or of `cls`) that can go.
+    1. past the last key: no pad/via of the chain's net within `near` mm (vertically) at or beyond the segment start -> the
+       segment runs on past the last key it serves;
+    2. ends on another net's pad/via (within clearance): it blocks that pad's escape (what prune_copper removes)."""
     out = {}
+    for c in trim_classes(cls):
+        _trim_class(board, c, near, out)
+    return list(out.values())
+
+
+def _trim_class(board, cls, near, out):
+    rl = board.rules
     pads_by_net = {}
     for pd in board.pads():
         if pd.net:
             pads_by_net.setdefault(pd.net, []).append(pd)
-    tr = config.current().lock_trim()
+    tr = config.current().lock_trim(cls)
     net_rx = re.compile(tr.get("nets", ".*"))
     key_rx = re.compile(tr["key_parts"]) if tr.get("key_parts") else None
     start = tr.get("start_part")
-    chains = [c for c in lane_chains(board) if net_rx.match(c[0])]      # only the configured lane nets are trimmed
-    band_a_y = min((y for _, y, _ in chains), default=0.0) + float(tr.get("band_depth", 5.0))     # band A = the first (lowest-y) lane band: trunks that start at `start_part`
+    chains = [c for c in trim_chains(board, cls) if net_rx.match(c[0])]      # only the configured nets are trimmed
+    band_a_y = min((y for _, y, _ in chains), default=0.0) + float(tr.get("band_depth", 5.0))     # band A = the first (lowest-y) band: trunks that start at `start_part`
     mcu_x = board.parts[start].pos[0] if start and start in board.parts else None
     for net, y, segs in chains:
         band_a = bool(start) and y <= band_a_y
         keys = [pd.pos[0] for pd in pads_by_net.get(net, []) if (key_rx is None or key_rx.match(pd.ref)) and (band_a or abs(pd.pos[1] - y) <= near)]
         if band_a and mcu_x is not None:
-            keys.append(mcu_x)                                     # a trunk starts at the MCU column
+            keys.append(mcu_x)                                     # a trunk starts at the start part's column
         if not keys:
             for t in segs:
-                out[id(t)] = (t, "lane %s y=%.1f has no key pad within %.0f mm" % (net, y, near))
+                out[id(t)] = (t, "%s %s y=%.1f has no key pad within %.0f mm" % (cls, net, y, near))
             continue
         lo, hi = min(keys), max(keys)
         for t in segs:
             x0, x1 = sorted((t.a[0], t.b[0]))
             if x0 >= hi - 1e-6:
-                out[id(t)] = (t, "lane %s y=%.1f runs %.1f mm past its last key (x=%.1f)" % (net, y, x1 - hi, hi))
+                out[id(t)] = (t, "%s %s y=%.1f runs %.1f mm past its last key (x=%.1f)" % (cls, net, y, x1 - hi, hi))
             elif x1 <= lo + 1e-6:
-                out[id(t)] = (t, "lane %s y=%.1f runs %.1f mm before its first key (x=%.1f)" % (net, y, lo - x0, lo))
-    # 2. lane copper on foreign pads / vias (F.Cu only: lanes are on F.Cu)
-    for net, y, segs in lane_chains(board):
+                out[id(t)] = (t, "%s %s y=%.1f runs %.1f mm before its first key (x=%.1f)" % (cls, net, y, lo - x0, lo))
+    # 2. copper on foreign pads / vias (same layer as the segment)
+    for net, y, segs in trim_chains(board, cls):
         for t in segs:
             if id(t) in out:
                 continue
@@ -188,16 +219,15 @@ def trim_candidates(board, near=10.0):
                 if (abs(pd.pos[0] - (t.a[0] + t.b[0]) / 2) > abs(t.a[0] - t.b[0]) / 2 + max(pd.size) + 1 or abs(pd.pos[1] - t.a[1]) > max(pd.size) + 1):
                     continue
                 if _seg_pad_dist(t.a, t.b, pd) - t.w / 2 < rl.clearance - 1e-6:
-                    out[id(t)] = (t, "lane %s y=%.1f segment x=%.1f..%.1f is %.2f mm from pad %s (%s): blocks its escape" % (
-                        net, y, min(t.a[0], t.b[0]), max(t.a[0], t.b[0]), max(0.0, _seg_pad_dist(t.a, t.b, pd) - t.w / 2), pd.id, pd.net))
+                    out[id(t)] = (t, "%s %s y=%.1f segment x=%.1f..%.1f is %.2f mm from pad %s (%s): blocks its escape" % (
+                        cls, net, y, min(t.a[0], t.b[0]), max(t.a[0], t.b[0]), max(0.0, _seg_pad_dist(t.a, t.b, pd) - t.w / 2), pd.id, pd.net))
                     break
             else:
                 for v in board.vias:
                     if v.net != t.net and geom.pt_seg_dist(v.pos, t.a, t.b) - t.w / 2 - v.dia / 2 < rl.clearance - 1e-6:
-                        out[id(t)] = (t, "lane %s y=%.1f segment x=%.1f..%.1f touches the via of %s at (%.1f,%.1f)" % (
-                            net, y, min(t.a[0], t.b[0]), max(t.a[0], t.b[0]), v.net, *v.pos))
+                        out[id(t)] = (t, "%s %s y=%.1f segment x=%.1f..%.1f touches the via of %s at (%.1f,%.1f)" % (
+                            cls, net, y, min(t.a[0], t.b[0]), max(t.a[0], t.b[0]), v.net, *v.pos))
                         break
-    return list(out.values())
 
 
 def _seg_pad_dist(a, b, pd):
@@ -244,7 +274,7 @@ def straight_blockage(board, conn, step=0.25):
             hit = None
             for t in cand_t:
                 if t.layer == layer and geom.pt_seg_dist(p, t.a, t.b) < r + t.w / 2:
-                    hit = (t.net, lock_tag(t) + (" lane" if cls_of(t) == "lane" and not t.locked else ""))
+                    hit = (t.net, lock_tag(t) + (" " + cls_of(t) if protected(cls_of(t)) and not t.locked else ""))
                     if t.locked:
                         break
             if hit is None:

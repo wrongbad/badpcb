@@ -80,7 +80,7 @@ def strategy(history, cur_names, fan_ref=None, session="S"):
     nets = " ".join(union[:8])
     if "strip" in modes:
         return ("the group %s kept flipping even after --strip --fanout: stop routing, change the board: `badpcb suggest %s mcu` / `badpcb plan %s` "
-                "(placement), swap the pins of the group, or `unlock` the lanes that wall it in" % (nets, session, session))
+                "(placement), swap the pins of the group, or `unlock` the locked copper that walls it in" % (nets, session, session))
     if "repair" in modes:
         return "next: `badpcb droute %s --strip%s --nets %s` (rip the whole group and re-escape it together)" % (session, fan, nets)
     return "next: `badpcb droute %s --repair --radius 4%s --nets %s` (rip only the copper around the open ends, route the group again)" % (session, fan, nets)

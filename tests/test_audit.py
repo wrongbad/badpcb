@@ -194,6 +194,22 @@ class Roles(unittest.TestCase):
             st.act(x.best.spec)
             self.assertLess(audit.Ctx(st).roles()[part_ref].dist, audit.Ctx(st).roles()[part_ref].limit * 1.3)
 
+    def test_audit_block_overrides_a_threshold(self):
+        from badpcb import config
+        c1 = part("C1", [P("1", (60, 40), "+3V3"), P("2", (60, 40.6), "GND")], (60, 40.3), half=(0.4, 0.7), value="100n")
+        st = stage([self.ic(), c1])
+        try:
+            self.assertEqual(audit.params()["decap_bypass_mm"], 3.0)
+            self.assertEqual(len(dets(audit.run(st, ["ROLES"]), "ROLES")), 1)
+            config.use({"audit": {"decap_bypass_mm": 500.0}})
+            self.assertEqual(audit.Ctx(st).roles()["C1"].limit, 500.0)
+            self.assertEqual(dets(audit.run(st, ["ROLES"]), "ROLES"), [])
+            config.use({"audit": {"nope": 1}})
+            with self.assertRaises(SystemExit):
+                audit.params()
+        finally:
+            config.use({})
+
     def test_crystal_and_pullup(self):
         ic = part("U3", [P(str(i + 1), (30 + 0.5 * i, 20), n) for i, n in enumerate(["XIN", "XOUT", "RUN", "b", "c", "d"])], (31.5, 20), half=(2, 1.5))
         y = part("Y1", [P("1", (35, 24), "XIN"), P("2", (35.8, 24), "XOUT")], (35.4, 24), half=(1.5, 1.0))

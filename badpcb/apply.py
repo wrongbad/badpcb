@@ -11,9 +11,9 @@ Writer: moves/rotates/flips footprints (checked against badpcb's predicted pad p
 must belong to a live board), re-nets pads, adds copper, then RIPS UP copper made wrong by the changes:
   * touching a changed pad (moved part or re-netted pin) of another net / of no net  -> removed (short)
   * attached (track end / via) to a pad of a moved part and no longer landing on a same-net pad -> removed (dangling)
-  * non-lane copper closer than the board clearance to a changed pad of another net   -> removed
-  * cascade: non-lane stubs/vias that lost their only attachment through a removal    -> removed
-Locked "lane"-class copper (project lock class `lane`, uuids carried in the plan) is kept unless shorted/broken by a changed pad.
+  * unprotected copper closer than the board clearance to a changed pad of another net   -> removed
+  * cascade: unprotected stubs/vias that lost their only attachment through a removal    -> removed
+Copper of `protect` lock classes (uuid -> class carried in the plan) is kept unless shorted/broken by a changed pad.
 Zones are refilled. Everything removed is listed in the report. swaps_applied.md lists the netlist/firmware changes.
 """
 import json
@@ -22,7 +22,7 @@ import os
 import subprocess
 import sys
 
-from . import config
+from . import config, locks
 
 
 # ============================================================================== plan (python3, no pcbnew)
@@ -66,7 +66,7 @@ def plan(st):
                   for i, (z, z0) in enumerate(zip(fin.zones, base.zones)) if z.polys != z0.polys]
     b_lock = {i.id: i.locked for i in list(base.tracks) + list(base.vias) if i.id}
     f_lock = {i.id: i.locked for i in list(fin.tracks) + list(fin.vias) if i.id}
-    P["lane_ids"] = sorted(i.id for i in list(base.tracks) + list(base.vias) if i.id and getattr(i, "cls", "") == "lane")
+    P["protect"] = locks.protected_ids(base)
     P["unlock"] = sorted(i for i, l in b_lock.items() if l and f_lock.get(i) is False)
     P["lock"] = sorted(i for i, l in b_lock.items() if not l and f_lock.get(i) is True)
     return P
@@ -155,12 +155,12 @@ def _pt_in_pad(pad, p, tol=0.02):
 
 
 # ============================================================================== writer ($KIPY)
-def write(plan_, src, dst, lanes_path=None):
+def write(plan_, src, dst):
     import pcbnew as p
     MM, TOMM = p.FromMM, p.ToMM
     board = p.LoadBoard(src)            # keep `board` alive for the whole run (footprints hold a raw pointer to it)
     zones0 = [z for z in board.Zones() if not z.GetIsRuleArea()] if plan_.get("zones") else []   # (typed wrappers are gone after the edits below)
-    rep = {"moved": [], "renet": [], "vias_added": 0, "tracks_added": 0, "removed": [], "kept_lane_warnings": [],
+    rep = {"moved": [], "renet": [], "vias_added": 0, "tracks_added": 0, "removed": [], "kept_protected_warnings": [],
            "placement_mismatch": [], "flip_skipped": []}
     # zone outlines first: pcbnew's typed wrappers (Zones(), Cast_to_ZONE) stop working after footprints/tracks are edited
     if plan_.get("zones"):
@@ -189,9 +189,7 @@ def write(plan_, src, dst, lanes_path=None):
                 nz.SetOutline(outline([extra]))
                 board.Add(nz)
             rep["zones_reshaped"].append("%s %s: %d polygon(s)" % (zc["net"], "/".join(zc["layers"]), len(zc["polys"])))
-    lanes = set(plan_.get("lane_ids", []))
-    if lanes_path and os.path.exists(lanes_path):          # legacy: a plain JSON list of uuids
-        lanes |= set(json.load(open(lanes_path)))
+    prot = dict(plan_.get("protect", {}))                  # uuid -> lock class name (protect-enabled classes)
     lname = lambda lid: board.GetLayerName(lid)
     lid = board.GetLayerID
 
@@ -228,7 +226,8 @@ def write(plan_, src, dst, lanes_path=None):
         return out
 
     unlock, lock = set(plan_.get("unlock", [])), set(plan_.get("lock", []))
-    lanes -= unlock                       # an unlocked lane is ordinary copper for the rip-up analysis below
+    for u in unlock:                      # unlocked copper is ordinary copper for the rip-up analysis below
+        prot.pop(u, None)
     for t in board.GetTracks():
         u = t.m_Uuid.AsString()
         if u in unlock:
@@ -239,7 +238,7 @@ def write(plan_, src, dst, lanes_path=None):
     pads0 = all_pads()
     items0 = [item_info(t) for t in board.GetTracks()]
     for it in items0:
-        it["lane"] = it["uuid"] in lanes
+        it["prot"] = prot.get(it["uuid"], "")
         it["t0"] = touch(it, pads0)
 
     # ---- parts
@@ -288,7 +287,7 @@ def write(plan_, src, dst, lanes_path=None):
 
     def tag(it):
         return "%s %s %s (%.2f,%.2f)-(%.2f,%.2f)%s" % (it["kind"], it["net"] or "-", "/".join(sorted(it["layers"])), *it["a"], *it["b"],
-                                                      (" [lane]" if it["lane"] else "") + (" [LOCKED]" if it.get("locked") else ""))
+                                                      (" [%s]" % it["prot"] if it["prot"] else "") + (" [LOCKED]" if it.get("locked") else ""))
     for it in items0:
         reason = None
         t1 = touch(it, pads1)
@@ -310,15 +309,15 @@ def write(plan_, src, dst, lanes_path=None):
                 if d <= 0:
                     reason = "shorts pad %s (net %s)" % (pid, pd["net"] or "-")
                     break
-                if d < clr and not it["lane"]:
+                if d < clr and not it["prot"]:
                     reason = "clearance %.2f < %.2f to pad %s (net %s)" % (d, clr, pid, pd["net"] or "-")
                     break
-                if d < clr and it["lane"]:
-                    rep["kept_lane_warnings"].append("%s clearance %.2f to pad %s" % (tag(it), d, pid))
+                if d < clr and it["prot"]:
+                    rep["kept_protected_warnings"].append("%s clearance %.2f to pad %s" % (tag(it), d, pid))
         if reason:
             removed[it["uuid"]] = (it, reason)
 
-    # 3. cascade: non-lane items that lost their only attachment through a removal
+    # 3. cascade: unprotected items that lost their only attachment through a removal
     def near(p, q, tol=0.01):
         return abs(p[0] - q[0]) < tol and abs(p[1] - q[1]) < tol
     changed = True
@@ -327,7 +326,7 @@ def write(plan_, src, dst, lanes_path=None):
         rem_pts = [(e, it["layers"]) for it, _ in removed.values() for e in ((it["a"], it["b"]) if it["kind"] == "track" else (it["a"],))]
         rem_via = [it["a"] for it, _ in removed.values() if it["kind"] == "via"]
         for it in items0:
-            if it["uuid"] in removed or it["lane"]:
+            if it["uuid"] in removed or it["prot"]:
                 continue
             ends = [it["a"], it["b"]] if it["kind"] == "track" else [it["a"]]
             for e in ends:
@@ -351,7 +350,7 @@ def write(plan_, src, dst, lanes_path=None):
     for u, (it, reason) in removed.items():
         board.Remove(it["obj"])
         it["obj"] = None
-        rep["removed"].append({"what": tag(it), "net": it["net"], "reason": reason, "lane": it["lane"]})
+        rep["removed"].append({"what": tag(it), "net": it["net"], "reason": reason, "protected": it["prot"]})
 
     # ---- new copper
     # explicit deletions: match against the items listed at the start (pcbnew's typed wrappers stop iterating after the first board.Remove)
@@ -453,7 +452,7 @@ def drc_new(d0, d1, types=("clearance", "courtyards_overlap", "shorting_items", 
 
 
 def run_lock_delta(session, src):
-    """Apply only the copper lock changes / lane trims of a session (unlock, lock, trim-lanes) to an already routed board `src`
+    """Apply only the copper lock changes / trims of a session (unlock, lock, trim) to an already routed board `src`
     in place (uuids identify the copper), so passes already routed are not thrown away. Returns the writer report."""
     from . import state
     st = state.State.load(session)
@@ -500,8 +499,8 @@ def run(session, out, src=None, verify=True, report_path=None):
         L.append("  WARN placement: " + w)
     for x in rep["removed"]:
         L.append("  ripped: %s -- %s" % (x["what"], x["reason"]))
-    for x in rep["kept_lane_warnings"]:
-        L.append("  kept locked lane near changed pad: " + x)
+    for x in rep["kept_protected_warnings"]:
+        L.append("  kept protected copper near changed pad: " + x)
     L.append("  swaps_applied: " + md)
     res = {"report": rep}
     if verify:

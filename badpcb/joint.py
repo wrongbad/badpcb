@@ -21,8 +21,6 @@ from . import audit as AU
 from . import geom, legal
 from .audit import Fix, Trial, _pads_hit, escape_zones, zone_scan
 
-HARD = 1.15            # hard limit = HARD x role rule
-SOFT_FAR = 12.0        # hard limit for parts without a distance rule (series R, test points)
 
 
 class Member:
@@ -31,7 +29,7 @@ class Member:
 
 
 def _ic_zones(ac, ref):
-    return [z for z in escape_zones(ac, {ref}) if z.n_pads >= 6]
+    return [z for z in escape_zones(ac, {ref}) if z.n_pads >= AU.params()["ic_min_pins"]]
 
 
 def _margin(b, bb):
@@ -117,7 +115,8 @@ def _partners(ac, ref):
 def _cands(ac, m, rects, edge, step=0.3, relax=1.0, grow=0.3):
     b = ac.b
     p = b.parts[m.ref]
-    hard = (m.limit * HARD if m.limit else SOFT_FAR) * relax
+    K = AU.params()
+    hard = (m.limit * K["joint_hard_factor"] if m.limit else K["joint_far_mm"]) * relax
     pk = ac.plane_keep(m.ref)
     k = [i for i, d in enumerate(p.pads) if d.net == m.net] or [0]
     partners = _partners(ac, m.ref)

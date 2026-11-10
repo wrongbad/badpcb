@@ -44,8 +44,10 @@ Found in the cwd (or a parent), via `--project PATH`, or `$BADPCB_PROJECT`. All 
   "mcu": "U1",
   "fine_pitch_parts": ["U1"],
   "swaps": "swaps.json",
-  "locks": {"classes": {"lane": "lanes.json", "mimic": "mimic.json:copied"},
+  "locks": {"classes": {"lane": {"file": "lanes.json", "protect": true, "trim": true},
+                        "mimic": {"file": "mimic.json", "key": "copied"}},
             "trim": {"nets": "^(EN|SENSE)\\d+$", "key_parts": "^U1\\d\\d$", "start_part": "U1"}},
+  "audit": {"decap_bypass_mm": 4.0},
   "planes": {"assume": ["GND", "+3V3"]},
   "krt": {"dir": "../tools/KiCadRoutingTools", "python": "../tools/krt-venv/bin/python"}
 }
@@ -53,7 +55,8 @@ Found in the cwd (or a parent), via `--project PATH`, or `$BADPCB_PROJECT`. All 
 - `rules.project`: the `.kicad_pro` (+ sibling `.kicad_dru`) DRC is graded against and copied beside every board badpcb writes (default: the input board's own).
 - `mcu`, `fine_pitch_parts`: the IC pin-swap groups apply to / parts whose fan-out matters (default: auto-detect pitch < 0.65 mm).
 - `swaps`: file or inline dict `{"mcu", "pin_names": {pin: name}, "groups": [...]}`; group kinds `pin_permutation`, `pin_assignment`, `part_sets`, `key_assignment` (needs `net_regex`). See `examples/key_board/swaps.json`.
-- `locks.classes`: JSON files of track/via uuids per copper class (`file` = list, `file:key` = `d[key]`). `lane` is the class `apply` protects and `trim-lanes` cuts.
+- `locks.classes`: copper lock classes, none by default. Each is `"name": "file[:key]"` (JSON list of track/via uuids, or `d[key]`) or `{"file", "key", "protect", "trim"}`. `protect`: `apply` keeps the copper unless a changed pad shorts or breaks it, and `legal`/`stubs` treat it as hard copper. `trim`: eligible for `trim [CLASS]` (alias `trim-lanes`; all trim classes when no CLASS); it may be a dict that overrides `locks.trim` (`nets`, `key_parts`, `start_part`, `band_depth`) for that class. Output labels use the class name.
+- `audit`: overrides for the ROLES / escape-zone thresholds (decap, filter-cap, crystal, pull-up distances, slack factors, minimum IC pins, fan-zone depth, joint-placement limits). Defaults and meanings: `DEFAULTS` in `badpcb/audit.py`; unknown keys are rejected. `badpcb audit --roles` and `badpcb project` print the effective values.
 - `planes.assume`: nets treated as plane nets on boards with no zones yet.
 `badpcb project` prints what was resolved.
 
@@ -82,11 +85,6 @@ Keep the board repo free of kernel code: put `badpcb.json` (+ swaps and lock fil
 
 ## Tests
 `python3 -m unittest discover -s tests -t .` (synthetic, no KiCad needed). `tests/test_board_smoke.py` is skipped unless `BADPCB_TEST_BOARD=/path/board.kicad_pcb` (needs `$KIPY`).
-
-## TODO / known board-flavoured remnants
-- Docstring and help examples use the case study's names (U1, R8, ADC0, EN3); they are examples only.
-- The lock class names `lane` (protected by `apply`, trimmed by `trim-lanes`) and `mimic` are conventions baked into the code.
-- Audit/ROLES heuristics (decap, filter, crystal, pull-up inference) are generic but tuned on one board.
 
 ## License
 

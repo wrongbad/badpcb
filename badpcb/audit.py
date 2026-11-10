@@ -25,7 +25,7 @@ from collections import defaultdict
 
 from . import actions as A
 from . import evaluate as EV
-from . import feas, geom, legal, ratsnest, swaps
+from . import config, feas, geom, legal, ratsnest, swaps
 from .state import fmt_delta, parse_specs
 
 DETS = ["ESCAPE", "PLANE", "BOWTIE", "ORIENT", "TENSION", "ROLES", "BUSORDER", "COURTYARD", "DENSITY"]
@@ -35,6 +35,43 @@ COURTYARD_BIAS = 0.09         # extractor courtyard boxes are ~0.045 mm larger p
 COURTYARD_TOL = 0.005         # mm of true overlap that KiCad's DRC flags (any positive overlap)
 PLANE_VIA_RADIUS = 2.5        # mm: a plane via must fit this close to the pad
 MAX_EVALS = 90
+
+# Role-rule / escape-zone tunables (mm unless noted). Override per project with an "audit": {...} block in badpcb.json;
+# unknown keys are rejected. `badpcb audit --roles` and `badpcb project` print the effective values.
+DEFAULTS = {
+    "ic_min_pins": 6,            # connected pins for a part to count as an IC (role anchors, fan-zone sides)
+    "bulk_farads": 1.5e-6,       # supply cap above this is "bulk" (looser distance rule, may anchor at a connector)
+    "decap_bypass_mm": 3.0,      # bypass cap centre -> supply pin of its IC
+    "decap_bulk_mm": 10.0,       # bulk cap -> IC supply pin / connector
+    "reg_cap_mm": 4.0,           # bulk cap on an inductor net -> inductor or IC pin
+    "crystal_mm": 8.0,           # crystal pad -> IC pin
+    "xtal_load_mm": 3.0,         # load cap -> crystal pad
+    "filter_cap_mm": 6.0,        # signal cap -> IC pin
+    "filter_cap_rc_mm": 8.0,     # signal cap on an RC node (one resistor hop) -> IC pin
+    "pull_mm": 15.0,             # pull-up / pull-down resistor -> IC pin
+    "esd_mm": 6.0,               # ESD/TVS -> connector pad
+    "violation_slack": 1.3,      # a role is only a finding beyond limit x slack
+    "err_factor": 2.5,           # ... and an ERR beyond limit x err_factor (else WARN)
+    "joint_hard_factor": 1.15,   # joint placement: hard limit = factor x role rule
+    "joint_far_mm": 12.0,        # joint placement: hard limit for parts without a distance rule
+    "zone_depth_min_mm": 2.0,    # fan-zone depth = clamp(zone_depth_pitch * pitch * pins, min, max)
+    "zone_depth_max_mm": 3.0,
+    "zone_depth_pitch": 0.3,
+    "zone_widen_mm": 1.0,        # fan-zone widening beyond the outermost pads, per side
+}
+
+
+def params():
+    """DEFAULTS overridden by the project's "audit" block (cached per project object)."""
+    cur = config.current()
+    c = getattr(params, "_c", None)
+    if c is None or c[0] is not cur:
+        over = cur.audit()
+        bad = sorted(set(over) - set(DEFAULTS))
+        if bad:
+            sys.exit("badpcb: unknown \"audit\" key(s) in badpcb.json: %s (known: %s)" % (", ".join(bad), ", ".join(DEFAULTS)))
+        c = params._c = (cur, {**DEFAULTS, **over})
+    return c[1]
 
 
 # ============================================================================= model
@@ -168,7 +205,7 @@ class Ctx:
         return len(p.pads) <= 3 and bool(PASSIVE_RX.match(p.ref))
 
     def is_ic(self, p):
-        return not self.is_passive(p) and len({d.num for d in p.pads if d.net}) >= 6 and not p.ref.startswith("SW")
+        return not self.is_passive(p) and len({d.num for d in p.pads if d.net}) >= params()["ic_min_pins"] and not p.ref.startswith("SW")
 
     def layer_of(self, ref):
         return "B.Cu" if self.b.parts[ref].side == "B" else "F.Cu"
@@ -179,7 +216,7 @@ class Ctx:
     @property
     def zones(self):
         if self._zones is None:
-            self._zones = [z for z in escape_zones(self) if z.n_pads >= 6]
+            self._zones = [z for z in escape_zones(self) if z.n_pads >= params()["ic_min_pins"]]
         return self._zones
 
     # ---- intent ratsnest: pad to pad MST of every non-plane net, existing copper ignored
@@ -308,6 +345,7 @@ class EZone:
 def escape_zones(ac, refs=None):
     """Escape zone of every fine-pitch side: rect from the pad row outward by D (2..3 mm, 0.3 * pitch * pins), widened by 1 mm."""
     b = ac.b
+    K = params()
     fp, geo = feas.fine_parts(b)
     out = []
     for ref, (S, g) in sorted(geo.items()):
@@ -326,13 +364,13 @@ def escape_zones(ac, refs=None):
             z = EZone()
             z.ref, z.side, z.layer, z.pitch, z.pw, z.ln = ref, key, lay, pitch, pw, ln
             z.n_pads, z.pads = len(L), used
-            z.D = min(3.0, max(2.0, 0.3 * pitch * len(L)))
+            z.D = min(K["zone_depth_max_mm"], max(K["zone_depth_min_mm"], K["zone_depth_pitch"] * pitch * len(L)))
             sgn = nrm[0] + nrm[1]
             z.sgn, z.ax = sgn, ax
             line = sum(d.pos[1 - ax] for d in L) / len(L)
             z.line = line
             ts = [d.pos[ax] for d in used]
-            z.t0, z.t1 = min(ts) - pw / 2 - 1.0, max(ts) + pw / 2 + 1.0
+            z.t0, z.t1 = min(ts) - pw / 2 - K["zone_widen_mm"], max(ts) + pw / 2 + K["zone_widen_mm"]
             a = line + sgn * ln / 2
             c = line + sgn * (ln / 2 + z.D)
             lo, hi = min(a, c), max(a, c)
@@ -1138,6 +1176,7 @@ def infer_roles(ac):
         if d.net:
             netpads[d.net].append(d)
     mcu = ac.w.cfg["mcu"]
+    K = params()
     roles = {}
 
     def ic_pads(net, exclude=None):
@@ -1156,7 +1195,7 @@ def infer_roles(ac):
             ics = [(d, q) for d, q in ics if q]
             if ics:
                 dist = max(geom.dist(d.pos, q.pos) for d, q in ics)
-                roles[ref] = Role(ref, "crystal", "/".join(q.id for _, q in ics), ics[0][1].pos, dist, 8.0, note="to %s" % ics[0][1].ref)
+                roles[ref] = Role(ref, "crystal", "/".join(q.id for _, q in ics), ics[0][1].pos, dist, K["crystal_mm"], note="to %s" % ics[0][1].ref)
             continue
         if not two:
             continue
@@ -1171,28 +1210,28 @@ def infer_roles(ac):
             X = sig.net
             val = farads(p.value)
             if ac.is_supply(X):
-                bulk = val is not None and val > 1.5e-6
+                bulk = val is not None and val > K["bulk_farads"]
                 ind = [d for d in netpads.get(X, []) if d.ref.startswith("L") and not d.ref.startswith("LED")]
                 if ind and bulk:
                     q = nearest(sig.pos, ic_pads(X) + ind)
-                    roles[ref] = Role(ref, "reg_cap", q.id if q else "", q.pos if q else None, geom.dist(sig.pos, q.pos) if q else None, 4.0, X,
+                    roles[ref] = Role(ref, "reg_cap", q.id if q else "", q.pos if q else None, geom.dist(sig.pos, q.pos) if q else None, K["reg_cap_mm"], X,
                                       "regulator output/input cap at the inductor or IC pin")
                     continue
                 anchors = ic_pads(X, ref) + ([d for d in netpads.get(X, []) if d.ref.startswith("J")] if bulk else [])
                 q = nearest(sig.pos, anchors)
                 if q:
-                    roles[ref] = Role(ref, "decap", q.id, q.pos, geom.dist(sig.pos, q.pos), 10.0 if bulk else 3.0, X, "bulk" if bulk else "bypass")
+                    roles[ref] = Role(ref, "decap", q.id, q.pos, geom.dist(sig.pos, q.pos), K["decap_bulk_mm"] if bulk else K["decap_bypass_mm"], X, "bulk" if bulk else "bypass")
                 continue
             if X in ("", None):
                 continue
             xt = [d for d in netpads.get(X, []) if d.ref.startswith("Y") or "Crystal" in b.parts[d.ref].fpid]
             if xt:
                 q = nearest(sig.pos, xt)
-                roles[ref] = Role(ref, "xtal_load", q.id, q.pos, geom.dist(sig.pos, q.pos), 3.0, X, "crystal load cap")
+                roles[ref] = Role(ref, "xtal_load", q.id, q.pos, geom.dist(sig.pos, q.pos), K["xtal_load_mm"], X, "crystal load cap")
                 continue
             q = nearest(sig.pos, ic_pads(X, ref))
             if q:
-                roles[ref] = Role(ref, "filter_cap", q.id, q.pos, geom.dist(sig.pos, q.pos), 6.0, X, "signal filter cap at the IC pin")
+                roles[ref] = Role(ref, "filter_cap", q.id, q.pos, geom.dist(sig.pos, q.pos), K["filter_cap_mm"], X, "signal filter cap at the IC pin")
             else:
                 # cap on an RC node: follow one resistor hop to the IC pin
                 for r2 in netpads.get(X, []):
@@ -1200,7 +1239,7 @@ def infer_roles(ac):
                         other = [d for d in b.parts[r2.ref].pads if d is not r2]
                         if other and ic_pads(other[0].net):
                             q = nearest(sig.pos, ic_pads(other[0].net))
-                            roles[ref] = Role(ref, "filter_cap", q.id, q.pos, geom.dist(sig.pos, q.pos), 8.0, X, "RC node via %s" % r2.ref)
+                            roles[ref] = Role(ref, "filter_cap", q.id, q.pos, geom.dist(sig.pos, q.pos), K["filter_cap_rc_mm"], X, "RC node via %s" % r2.ref)
                             break
         elif ref.startswith("R"):
             a, c = pl
@@ -1208,12 +1247,12 @@ def infer_roles(ac):
                 if ac.is_supply(ot.net) and ac.is_signal(me.net):
                     q = nearest(me.pos, ic_pads(me.net))
                     if q:
-                        roles[ref] = Role(ref, "pullup", q.id, q.pos, geom.dist(me.pos, q.pos), 15.0, me.net, "pull-up to %s" % ot.net)
+                        roles[ref] = Role(ref, "pullup", q.id, q.pos, geom.dist(me.pos, q.pos), K["pull_mm"], me.net, "pull-up to %s" % ot.net)
                     break
                 if ac.is_gnd(ot.net) and ac.is_signal(me.net):
                     q = nearest(me.pos, ic_pads(me.net))
                     if q:
-                        roles[ref] = Role(ref, "pulldown", q.id, q.pos, geom.dist(me.pos, q.pos), 15.0, me.net, "pull-down")
+                        roles[ref] = Role(ref, "pulldown", q.id, q.pos, geom.dist(me.pos, q.pos), K["pull_mm"], me.net, "pull-down")
                     break
             else:
                 if ac.is_signal(a.net) and ac.is_signal(c.net):
@@ -1229,7 +1268,7 @@ def infer_roles(ac):
                 conn = [d for d in netpads.get(sig.net, []) if d.ref.startswith("J") or "USB" in d.ref]
                 q = nearest(sig.pos, conn)
                 if q:
-                    roles[ref] = Role(ref, "esd", q.id, q.pos, geom.dist(sig.pos, q.pos), 6.0, sig.net, "ESD/TVS at the connector")
+                    roles[ref] = Role(ref, "esd", q.id, q.pos, geom.dist(sig.pos, q.pos), K["esd_mm"], sig.net, "ESD/TVS at the connector")
         elif ref.startswith("L"):
             q = nearest(pl[0].pos, [d for d in netpads.get(pl[0].net, []) + netpads.get(pl[1].net, []) if ac.is_ic(b.parts[d.ref])])
             roles[ref] = Role(ref, "inductor", q.id if q else "", q.pos if q else None, geom.dist(pl[0].pos, q.pos) if q else None, None, pl[0].net, "regulator inductor")
@@ -1237,11 +1276,12 @@ def infer_roles(ac):
 
 
 def role_violation(r):
-    if r.limit is None or r.dist is None or r.dist <= r.limit * 1.3:
+    K = params()
+    if r.limit is None or r.dist is None or r.dist <= r.limit * K["violation_slack"]:
         return None
     if r.kind in ("pullup", "pulldown"):
         return "NOTE"
-    return "ERR" if r.dist > 2.5 * r.limit else "WARN"
+    return "ERR" if r.dist > K["err_factor"] * r.limit else "WARN"
 
 
 
@@ -1293,7 +1333,8 @@ def detect_roles(ac):
 
 def sec_roles(ac):
     rs = ac.roles()
-    L = ["inferred roles (%d parts); limit = max centre-to-anchor distance of the role rule; edit the driver's mental model if wrong:" % len(rs)]
+    L = ["thresholds (badpcb.json \"audit\" overrides): " + " ".join("%s=%g" % kv for kv in params().items()),
+         "inferred roles (%d parts); limit = max centre-to-anchor distance of the role rule; edit the driver's mental model if wrong:" % len(rs)]
     by = defaultdict(list)
     for r in rs.values():
         by[r.kind].append(r)

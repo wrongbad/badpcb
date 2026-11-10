@@ -662,7 +662,10 @@ def cmd_project(a):
     print("rules project: %s" % (P.rules_pro or "(each board's own .kicad_pro)"))
     print("mcu          : %s    fine-pitch parts: %s" % (P.mcu or "-", ",".join(P.data.get("fine_pitch_parts") or []) or "(auto-detect)"))
     print("swap groups  : %s" % (", ".join(g["id"] for g in P.swaps()["groups"]) or "none"))
-    print("lock classes : %s" % (", ".join("%s=%s" % (k, os.path.basename(v[0])) for k, v in P.lock_classes().items()) or "none"))
+    print("lock classes : %s" % (", ".join("%s=%s%s" % (k, os.path.basename(v[0]), "".join(" +" + f for f in ("protect", "trim") if P.lock_props(k)[f]))
+                                           for k, v in P.lock_classes().items()) or "none"))
+    from . import audit
+    print("audit        : %s" % (" ".join("%s=%g%s" % (k, v, "*" if k in P.audit() else "") for k, v in audit.params().items()) + "   (* = overridden)"))
     print("KIPY         : %s %s" % (config.kipy(), "" if config.kipy_available() else "(NOT FOUND)"))
     print("kicad-cli    : %s %s" % (config.kicad_cli(), "" if config.kicad_cli_available() else "(NOT FOUND)"))
     from . import droute

@@ -260,10 +260,10 @@ def explain_open(ctx, scope_nets, parsed, limit=14):
                     locked_seen[n] = locked_seen.get(n, 0) + 1
     prot = sorted(n for n in (scope or ()) if n in parsed.get("protected", ()) or (n in parsed["failed"] and _lock_note(b, n)))
     if prot:
-        L.append("  PROTECTED (net owns locked copper, so KRT never rips it nor re-routes it around other nets): %s -> `unlock <net>` / `unlock lanes`" %
+        L.append("  PROTECTED (net owns locked copper, so KRT never rips it nor re-routes it around other nets): %s -> `unlock <net>` / `unlock <class>`" %
                  " ".join("%s %s" % (n, _lock_note(b, n)) for n in prot[:10]))
     if locked_seen:
-        L.append("  LOCKED blockers named by KRT: %s -> consider `unlock <net>` (or `unlock lanes`) in the session, then `badpcb apply`/droute again" %
+        L.append("  LOCKED blockers named by KRT: %s -> consider `unlock <net>` (or `unlock <class>`) in the session, then `badpcb apply`/droute again" %
                  " ".join("%s %s" % (n, _lock_note(b, n)) for n in sorted(locked_seen, key=lambda n: -locked_seen[n])[:8]))
     if len(conns) > limit:
         L.append("  ... %d more open connections in scope" % (len(conns) - limit))
@@ -306,12 +306,12 @@ def main_args(a):
         stale = a.fresh or not os.path.exists(applied) or os.path.getmtime(applied) < os.path.getmtime(sp)
         if stale and not a.fresh and done_n == nlog and os.path.exists(applied):
             stale = False                      # session file only re-saved (suggest/report store `last`); no new actions
-        LOCKOPS = ("unlock", "lock", "trim_lanes", "add_tracks")
+        LOCKOPS = ("unlock", "lock", "trim", "add_tracks")
         if stale and not a.fresh and done_n is not None and nlog > done_n and os.path.exists(cur) and \
                 all(d["op"] in LOCKOPS for e in st_now.log[done_n:] for d in e["acts"]):
-            # only copper lock changes / lane trims since the last apply: patch the routed board instead of re-applying (keeps the passes)
+            # only copper lock changes / trims since the last apply: patch the routed board instead of re-applying (keeps the passes)
             rep, nu, nl_, nt = AP.run_lock_delta(name, cur)
-            print("session %s: %d new lock/trim step(s) applied to current.kicad_pcb in place (%d unlocked, %d locked, %d lane tracks trimmed); routed passes kept" % (
+            print("session %s: %d new lock/trim step(s) applied to current.kicad_pcb in place (%d unlocked, %d locked, %d tracks trimmed); routed passes kept" % (
                 name, nlog - done_n, nu, nl_, len([r for r in rep["removed"]]) if False else nt))
             json.dump({"n": nlog}, open(meta, "w"))
             os.utime(applied)

@@ -14,7 +14,7 @@ Pads are rectangles (rect/roundrect/trapezoid: polygon) or capsules (circle/oval
 import math
 from collections import defaultdict
 
-from . import geom
+from . import geom, locks
 
 CELL = 4.0
 
@@ -129,7 +129,7 @@ def _copper_index(world):
     g = defaultdict(list)
     for t in b.tracks:
         sh = seg_shape(t.a, t.b, t.w)
-        e = (sh, {t.layer}, t.net, "track %s %s%s" % (t.net or "-", t.layer, " [lane]" if getattr(t, "cls", "") == "lane" else ""))
+        e = (sh, {t.layer}, t.net, "track %s %s%s" % (t.net or "-", t.layer, " [%s]" % t.cls if locks.protected(getattr(t, "cls", "")) else ""))
         for c in _cells(sh.bbox):
             g[c].append(e)
     for v in b.vias:
@@ -182,8 +182,8 @@ def pad_conflicts(world, ref, pos, rot, side, clr=None):
                     continue
                 d = dist(sh, csh)
                 if d < clr - 1e-6:
-                    if label.endswith("[lane]"):
-                        out.append("pad %s.%s %.2f mm from foreign %s (< clearance %.2f; lanes are kept by apply)" % (ref, pd.num, d, label, clr))
+                    if label.endswith("]"):
+                        out.append("pad %s.%s %.2f mm from foreign %s (< clearance %.2f; protected copper is kept by apply)" % (ref, pd.num, d, label, clr))
                     else:
                         out.append("WARN pad %s.%s %.2f mm from foreign %s: apply will rip that copper up" % (ref, pd.num, d, label))
         for h in b.holes:

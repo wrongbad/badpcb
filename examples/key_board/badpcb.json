@@ -11,8 +11,8 @@
  "swaps": "swaps.json",
  "locks": {
   "classes": {
-   "lane": "lanes.json",
-   "mimic": "mimic.json:copied"
+   "lane": {"file": "lanes.json", "protect": true, "trim": true},
+   "mimic": {"file": "mimic.json", "key": "copied"}
   },
   "trim": {
    "nets": "^(EN|SENSE)\\d+$",

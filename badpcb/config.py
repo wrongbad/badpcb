@@ -12,8 +12,10 @@ badpcb.json (every key optional; relative paths are relative to the directory ho
     "mcu":    "U1",                               # main IC of interest (pin-swap groups, plan/audit default, grid choice)
     "fine_pitch_parts": ["U1"],                   # parts whose fan-out matters; default: auto (pad pitch < 0.65 mm, >= 16 pads)
     "swaps":  "swaps.json" | {inline dict},       # swap groups: {"mcu", "pin_names", "groups":[...]}  (see examples/key_board)
-    "locks":  {"classes": {"lane": "lanes.json", "mimic": "mimic.json:copied"},   # copper lock classes: file[:key] with track/via uuids
-               "trim":    {"nets": "^(EN|SENSE)\\\\d+$", "key_parts": "^U1\\\\d\\\\d$", "start_part": "U1"}},
+    "locks":  {"classes": {"trunk": {"file": "trunks.json", "protect": true, "trim": true},   # copper lock classes (none by default)
+                           "ref":   {"file": "ref.json", "key": "copied"}},                   # plain class; "name": "file[:key]" is shorthand
+               "trim":    {"nets": "^SIG\\\\d+$", "key_parts": "^U1\\\\d\\\\d$", "start_part": "U1", "band_depth": 5.0}},
+    "audit":  {"decap_bypass_mm": 4.0},           # override ROLES / escape-zone thresholds (defaults: badpcb.audit.DEFAULTS)
     "planes": {"assume": ["GND", "+3V3"]},        # nets to treat as plane nets when the board has no zones yet
     "krt":    {"dir": "...", "python": "..."}     # KiCadRoutingTools location (else $KRT_DIR / $KRT_PY)
   }
@@ -126,16 +128,42 @@ class Project:
         s.setdefault("groups", [])
         return s
 
+    def _lock_spec(self, spec):
+        """-> (file, key or None, props dict). spec = 'file[:key]' or {"file": .., "key": .., "protect": bool, "trim": bool | {trim params}}."""
+        if isinstance(spec, dict):
+            f, _, k = str(spec.get("file", "")).partition(":")
+            return f, spec.get("key") or k or None, spec
+        f, _, k = str(spec).partition(":")
+        return f, k or None, {}
+
+    def _lock_specs(self):
+        return (self.data.get("locks") or {}).get("classes") or {}
+
     def lock_classes(self):
-        """{class name: (absolute json path, key or None)}. Spec 'file.json' = a JSON list of uuids, 'file.json:key' = d[key]."""
+        """{class name: (absolute json path, key or None)}. File 'x.json' = a JSON list of uuids, key = d[key]."""
         out = {}
-        for name, spec in ((self.data.get("locks") or {}).get("classes") or {}).items():
-            f, _, key = str(spec).partition(":")
-            out[name] = (self.rel(f), key or None)
+        for name, spec in self._lock_specs().items():
+            f, k, _ = self._lock_spec(spec)
+            out[name] = (self.rel(f), k)
         return out
 
-    def lock_trim(self):
-        return (self.data.get("locks") or {}).get("trim") or {}
+    def lock_props(self, name):
+        """{'protect': bool, 'trim': bool} of a lock class (both False for the string shorthand and for unknown names)."""
+        spec = self._lock_specs().get(name)
+        p = self._lock_spec(spec)[2] if spec is not None else {}
+        return {"protect": bool(p.get("protect")), "trim": bool(p.get("trim"))}
+
+    def lock_trim(self, name=None):
+        """Trim parameters (locks.trim), overridden by the class's own `trim` dict when it has one."""
+        t = dict((self.data.get("locks") or {}).get("trim") or {})
+        spec = self._lock_specs().get(name)
+        if isinstance(spec, dict) and isinstance(spec.get("trim"), dict):
+            t.update(spec["trim"])
+        return t
+
+    def audit(self):
+        """Optional "audit" block: overrides for badpcb.audit.DEFAULTS."""
+        return dict(self.data.get("audit") or {})
 
     def plane_hints(self):
         return list((self.data.get("planes") or {}).get("assume") or [])

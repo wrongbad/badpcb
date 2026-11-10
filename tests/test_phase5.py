@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from badpcb import actions as A
-from badpcb import feas, legal, locks
+from badpcb import config, feas, legal, locks
 from tests import synth
 
 
@@ -164,6 +164,41 @@ class TestLocks(unittest.TestCase):
             shutil.rmtree(tmp)
 
 
+class TestLockProps(unittest.TestCase):
+    def tearDown(self):
+        config.use({})
+
+    def test_default_has_no_classes_and_shorthand_has_no_props(self):
+        P = config.use({})
+        self.assertEqual(P.lock_classes(), {})
+        P = config.use({"locks": {"classes": {"a": "a.json:k", "b": {"file": "b.json", "protect": True, "trim": True}}}}, root="/r")
+        self.assertEqual(P.lock_classes(), {"a": ("/r/a.json", "k"), "b": ("/r/b.json", None)})
+        self.assertEqual(P.lock_props("a"), {"protect": False, "trim": False})
+        self.assertEqual(P.lock_props("b"), {"protect": True, "trim": True})
+
+    def test_trim_is_per_class(self):
+        parts = [synth.part("A", [synth.pad("1", (5, 10), "S")], pos=(5, 10))]
+        t1, t2 = synth.track((6, 10), (30, 10), "S", locked=True), synth.track((6, 20), (30, 20), "S", locked=True)
+        t1["id"], t2["id"] = "u-1", "u-2"
+        tmp = tempfile.mkdtemp()
+        try:
+            import json
+            json.dump(["u-1"], open(os.path.join(tmp, "x.json"), "w"))
+            json.dump(["u-2"], open(os.path.join(tmp, "y.json"), "w"))
+            config.use({"locks": {"classes": {"x": {"file": "x.json", "trim": True}, "y": {"file": "y.json"}}}}, root=tmp)
+            b = synth.board(parts, tracks=[t1, t2], size=(40, 30))
+            self.assertEqual(locks.protected("x"), False)
+            self.assertEqual({t.id for t, _ in locks.trim_candidates(b)}, {"u-1"})
+            self.assertTrue(all(r.startswith("x ") for _, r in locks.trim_candidates(b)))
+            with self.assertRaises(ValueError):
+                locks.trim_candidates(b, "y")
+            self.assertEqual(A.parse("trim x")[0].a["cls"], "x")
+            self.assertEqual(A.parse("trim-lanes")[0].op, "trim")
+            self.assertEqual(A.Action.from_dict({"op": "trim_lanes"}).op, "trim")
+        finally:
+            shutil.rmtree(tmp)
+
+
 class TestLegal(unittest.TestCase):
     def test_pad_on_pad_refused_courtyard_free(self):
         # R3's courtyard is tiny so the courtyard test passes, but its pad lands on R2's pad
@@ -182,7 +217,14 @@ class TestLegal(unittest.TestCase):
         w = toyw(tracks=[synth.track((10, 20), (20, 20), "X", locked=True), synth.track((10, 22), (20, 22), "Y", locked=False)], parts=parts)
         w.board.tracks[0].cls = "lane"
         errs, _ = A.check(w, A.parse("move R3 15 20")[0])
-        self.assertTrue(any("lane" in e for e in errs), errs)
+        self.assertFalse(any("lane" in e for e in errs), errs)          # class without `protect`: ordinary locked copper
+        config.use({"locks": {"classes": {"lane": {"file": "l.json", "protect": True}}}}, root=tempfile.gettempdir())
+        w.board.lock_ver = 1                                            # invalidate the cached copper index
+        try:
+            errs, _ = A.check(w, A.parse("move R3 15 20")[0])
+            self.assertTrue(any("[lane]" in e for e in errs), errs)
+        finally:
+            config.use({})
         errs, warns = A.check(w, A.parse("move R3 15 22")[0])
         self.assertFalse(errs, errs)
         self.assertTrue(any("rip" in x for x in warns), warns)

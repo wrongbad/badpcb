@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 
-from . import actions as A, config, cli
+from . import actions as A, config, cli, locks
 
 
 def plan_stubs(board_path, r_max=2.5):
@@ -19,7 +19,7 @@ def plan_stubs(board_path, r_max=2.5):
     rl = b.rules
     P = {"session": "stubs", "base_board": board_path, "parts": [], "pads": [], "vias_add": [], "tracks_add": [], "vias_del": [], "tracks_del": [],
          "hints": {}, "unlock": [], "lock": [], "clearance": rl.clearance,
-         "lane_ids": sorted(i.id for i in list(b.tracks) + list(b.vias) if i.id and getattr(i, "cls", "") == "lane")}
+         "protect": locks.protected_ids(b)}
     failed = []
     for I in c.rn.stubs:
         pd = A._pad_by_id(b, I.pads[0])

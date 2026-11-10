@@ -22,7 +22,8 @@ Plane zone edit (badpcb/actions.py reshape; apply rewrites the zone outlines, th
 Copper lock actions (badpcb/locks.py; `badpcb apply` writes the lock flags, KRT treats locked copper as unrippable):
   unlock TARGET   TARGET = class (lanes|mimic|fanout|all), net or glob (SENSE4, EN*), region (R8) or box x0,y0,x1,y1
   lock TARGET     inverse of unlock
-  trim-lanes      delete lane segments past the last key of each lane and lane ends sitting on another net's pad/via
+  trim [CLASS]    delete segments of trim-enabled lock classes (all of them, or CLASS) past the last key of each chain and chain ends
+                  sitting on another net's pad/via (alias: trim-lanes)
 Topology hints (stored in World.hints for groute; they never change the ratsnest):
   corridor NET via=C60,C97      side NET of=U1 dir=S        reserve CUT NET [NET ...]
   layer NET|GLOB LAYER          freeze R8|x0,y0,x1,y1       prio NET [LEVEL]
@@ -43,7 +44,7 @@ from . import geom, swaps
 
 HINT_OPS = ("corridor", "side", "reserve", "layer", "freeze", "priority", "near")
 GEOM_OPS = ("move", "nudge", "rotate", "flip")
-LOCK_OPS = ("unlock", "lock", "trim_lanes", "add_tracks")
+LOCK_OPS = ("unlock", "lock", "trim", "add_tracks")
 ALL_OPS = GEOM_OPS + ("swap_pins", "assign", "reassign_keys", "add_via", "del_via", "reshape") + LOCK_OPS + HINT_OPS
 
 # op -> (positional argument names, types).  Types: s str, f float, l list of str
@@ -67,13 +68,13 @@ SPEC = {
     "near": (("ref", "s"), ("to", "s"), ("max", "f")),
     "unlock": (("target", "s"),),
     "lock": (("target", "s"),),
-    "trim_lanes": (),
+    "trim": (("cls", "s"),),
     "add_tracks": (),
 }
 ALIASES = {"mv": "move", "place": "move", "nd": "nudge", "rot": "rotate", "r": "rotate", "swap": "swap_pins",
            "sw": "swap_pins", "asg": "assign", "pin": "assign", "keys": "reassign_keys", "swapkeys": "reassign_keys",
            "via": "add_via", "zone": "reshape", "plane": "reshape", "addvia": "add_via", "delvia": "del_via", "cor": "corridor", "res": "reserve",
-           "trim": "trim_lanes", "trimlanes": "trim_lanes", "unl": "unlock", "lay": "layer", "prio": "priority", "pri": "priority", "keep": "near"}
+           "trimlanes": "trim", "trim_lanes": "trim", "unl": "unlock", "lay": "layer", "prio": "priority", "pri": "priority", "keep": "near"}
 FILLER = {"to", "by", "at", "->", "@", "=", "of:", "on", "the"}
 
 
@@ -101,6 +102,8 @@ class Action:
     @classmethod
     def from_dict(cls, d):
         d = dict(d)
+        if d.get("op") == "trim_lanes":            # sessions logged before the rename
+            d["op"] = "trim"
         return cls(d.pop("op"), d.pop("force", False), **d)
 
     def __eq__(self, o):
@@ -152,8 +155,8 @@ class Action:
             s = "near %s %s %s" % (a["ref"], a["to"], f(a["max"]))
         elif op in ("unlock", "lock"):
             s = "%s %s" % (op, a.get("target") or "<%d items>" % len(a.get("ids", [])))
-        elif op == "trim_lanes":
-            s = "trim-lanes"
+        elif op == "trim":
+            s = "trim" + (" " + a["cls"] if a.get("cls") else "")
         elif op == "add_tracks":
             s = "restore %d tracks" % len(a.get("tracks", []))
         else:
@@ -185,7 +188,7 @@ def parse_one(text):
         raise ActionError("unknown action '%s'. Syntax: move REF X Y | nudge REF DX DY | rot REF DEG | flip REF | "
                           "swap GROUP NETA NETB | assign GROUP NET PIN | keys SA SB | via NET X Y [pad=U1.5] | "
                           "corridor NET via=C1,C2 | side NET of=U1 dir=S | reserve CUT NET.. | layer NET LAYER | "
-                          "freeze R8 | prio NET [N] | unlock|lock CLASS|NET|R8 | trim-lanes" % toks[0])
+                          "freeze R8 | prio NET [N] | unlock|lock CLASS|NET|R8 | trim [CLASS]" % toks[0])
     force = clear = stub = False
     kw, pos = {}, []
     for t in toks[1:]:
@@ -236,7 +239,7 @@ def parse_one(text):
             if (op == "priority" and n == "level"):
                 out[n] = 1.0
                 continue
-            if op == "freeze" and n == "region" or n in ("via", "nets", "to", "max") and clear:
+            if op in ("freeze", "trim") and n in ("region", "cls") or n in ("via", "nets", "to", "max") and clear:
                 out[n] = [] if t == "l" else ""
                 continue
             raise ActionError("%s: missing argument '%s'" % (op, n))
@@ -871,14 +874,18 @@ def check(world, act):
         else:
             warns.append("%s %s: %d of %d item(s) (%s)" % (op, a["target"], len(todo), len(items),
                                                            " ".join("%s:%d" % kv for kv in sorted(_by_cls(todo).items()))))
-    elif op == "trim_lanes":
+    elif op == "trim":
         from . import locks
-        c = locks.trim_candidates(b)
+        try:
+            c = locks.trim_candidates(b, a.get("cls") or None)
+        except ValueError as e:
+            errs.append(str(e))
+            return errs, warns
         if not c:
-            errs.append("trim-lanes: no lane segment to trim")
+            errs.append("trim: no segment to trim")
         else:
             past = sum(1 for _, r in c if "past" in r or "before" in r or "no key" in r)
-            warns.append("trim-lanes: %d lane segment(s) go: %d beyond the last/first key of their lane, %d on another net's pad/via%s" % (
+            warns.append("trim: %d segment(s) go: %d beyond the last/first key of their chain, %d on another net's pad/via%s" % (
                 len(c), past, len(c) - past, "".join("; " + r for _, r in c if not ("past" in r or "before" in r or "no key" in r))[:300]))
     elif op == "add_tracks":
         pass
@@ -1069,8 +1076,8 @@ def apply(world, act, check_first=True):
         return Action("reshape", force=True, net=a["net"], mode="restore", state=state), nets
     if op in ("unlock", "lock"):
         return _apply_lock(world, act)
-    if op == "trim_lanes":
-        return _apply_trim(world)
+    if op == "trim":
+        return _apply_trim(world, act)
     if op == "add_tracks":
         return _apply_add_tracks(world, act)
     return _apply_hint(world, act), set()
@@ -1093,10 +1100,10 @@ def _apply_lock(world, act):
     return inv, {i.net for i in items if i.net}
 
 
-def _apply_trim(world):
+def _apply_trim(world, act):
     from . import locks
     b = world.board
-    cands = locks.trim_candidates(b)
+    cands = locks.trim_candidates(b, act.a.get("cls") or None)
     dead = {id(t) for t, _ in cands}
     gone = [t for t in b.tracks if id(t) in dead]
     b.tracks[:] = [t for t in b.tracks if id(t) not in dead]
@@ -1120,7 +1127,7 @@ def _apply_add_tracks(world, act):
 
 
 def _del_tracks_action(ids):
-    return Action("trim_lanes", force=True)
+    return Action("trim", force=True)
 
 
 def _hint_slot(act):
