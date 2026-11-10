@@ -4,8 +4,8 @@ import shutil
 import tempfile
 import unittest
 
-from rk import actions as A
-from rk import feas, legal, locks
+from badpcb import actions as A
+from badpcb import feas, legal, locks
 from tests import synth
 
 
@@ -60,7 +60,7 @@ class TestFeas(unittest.TestCase):
         json.dump({"net_settings": {"classes": [{"name": "Default", "clearance": 0.15, "track_width": 0.2, "via_diameter": 0.5, "via_drill": 0.25}]},
                    "board": {"design_settings": {"rules": {"min_track_width": 0.15}}}}, open(pro, "w"))
         open(os.path.join(d, "b.kicad_dru"), "w").write(
-            "(version 1)\n# rk-area U1_FINE part=U1 margin=1.00 bbox=-4.000,-4.000,4.000,4.000\n"
+            "(version 1)\n# badpcb-area U1_FINE part=U1 margin=1.00 bbox=-4.000,-4.000,4.000,4.000\n"
             "(rule \"a\"\n  (condition \"A.intersectsArea('U1_FINE') || B.intersectsArea('U1_FINE')\")\n  (constraint clearance (min 0.100mm)))\n"
             "(rule \"b\"\n  (condition \"A.intersectsArea('U1_FINE')\")\n  (constraint track_width (min 0.100mm)))\n")
         e = feas.load_rules(pro)
@@ -70,7 +70,7 @@ class TestFeas(unittest.TestCase):
         self.assertTrue(feas.check(self.b, e)[0][3][0]["ok"])
 
     def test_grid_divides_pitch(self):
-        from rk import cli
+        from badpcb import cli
         c = cli.Ctx(self.b)
         g = feas.region_grids(c, self.eff(0.15, 0.15, area=(0.10, 0.10)))
         self.assertTrue(all(abs(0.4 / v[0] - round(0.4 / v[0])) < 1e-6 and v[0] <= 0.2 for v in g.values() if "fine" in v[1]))
@@ -115,8 +115,8 @@ class TestLocks(unittest.TestCase):
         self.assertEqual([t.locked for t in w.board.tracks], [False, True])
 
     def test_plan_has_unlock(self):
-        from rk import apply as AP
-        from rk import state
+        from badpcb import apply as AP
+        from badpcb import state
         w = toyw(tracks=[synth.track((1, 1), (5, 1), "N1", locked=True)])
         w.board.tracks[0].id = "abc"
         base = __import__("copy").deepcopy(w.board)
@@ -130,7 +130,7 @@ class TestLocks(unittest.TestCase):
         self.assertEqual(P["lock"], [])
 
     def test_blockage_names_locked_lane(self):
-        from rk import ratsnest
+        from badpcb import ratsnest
         parts = [synth.part("A", [synth.pad("1", (5, 10), "S")], pos=(5, 10)), synth.part("B", [synth.pad("1", (35, 10), "S")], pos=(35, 10))]
         b = synth.board(parts, tracks=[synth.track((6, 10), (34, 10), "L", locked=True)], size=(40, 30))
         locks.classify(b)
@@ -143,7 +143,7 @@ class TestLocks(unittest.TestCase):
 
     def test_configured_class_is_classified_and_labelled(self):
         import json
-        from rk import config, ratsnest
+        from badpcb import config, ratsnest
         tmp = tempfile.mkdtemp()
         try:
             json.dump(["u-1"], open(os.path.join(tmp, "lanes.json"), "w"))

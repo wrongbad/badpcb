@@ -1,6 +1,6 @@
-"""Add plane-stub vias to a routed board WITHOUT touching signal copper: `python3 -m rk.stubs in.kicad_pcb out.kicad_pcb`.
+"""Add plane-stub vias to a routed board WITHOUT touching signal copper: `python3 -m badpcb.stubs in.kicad_pcb out.kicad_pcb`.
 
-For every plane-net island that no via serves (rk `plane_stubs`) the nearest legal via spot is searched (inside the net's plane zone,
+For every plane-net island that no via serves (badpcb `plane_stubs`) the nearest legal via spot is searched (inside the net's plane zone,
 clear of ALL existing copper, pads and holes, stub segment clear too) and a short stub + via is written. If no spot exists the
 island is listed (the only case where a signal would have to move)."""
 import json
@@ -57,7 +57,7 @@ def main(src, dst):
     pj = dst.rsplit(".", 1)[0] + ".stubs.plan.json"
     rj = dst.rsplit(".", 1)[0] + ".stubs.rep.json"
     json.dump(P, open(pj, "w"))
-    r = config.kipy_run(["-m", "rk.apply", "--write", pj, os.path.abspath(src), os.path.abspath(dst), rj], cwd=config.current().root)
+    r = config.kipy_run(["-m", "badpcb.apply", "--write", pj, os.path.abspath(src), os.path.abspath(dst), rj], cwd=config.current().root)
     print("plane stubs: %d vias added, %d islands without a legal spot%s" % (len(P["vias_add"]), len(failed), (": " + "; ".join(failed)) if failed else ""))
     if not os.path.exists(dst):
         print(r.stderr[-1500:])

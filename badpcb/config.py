@@ -1,10 +1,10 @@
 """Project configuration and environment: the only place that knows where things live.
 
-rk is board-agnostic. Everything that is specific to one board lives in a per-board project file, `rk.json`, found in the
-current directory (or a parent), via `--project PATH|DIR`, or via $RK_PROJECT. Without one, rk runs with defaults
-(fine-pitch parts auto-detected, no swap groups, no lock classes, state under ./.rk/).
+badpcb is board-agnostic. Everything that is specific to one board lives in a per-board project file, `badpcb.json`, found in the
+current directory (or a parent), via `--project PATH|DIR`, or via $BADPCB_PROJECT. Without one, badpcb runs with defaults
+(fine-pitch parts auto-detected, no swap groups, no lock classes, state under ./.badpcb/).
 
-rk.json (every key optional; relative paths are relative to the directory holding rk.json):
+badpcb.json (every key optional; relative paths are relative to the directory holding badpcb.json):
 
   {
     "board":  "my_board.kicad_pcb",               # default board (first of a list); info only, commands take explicit paths
@@ -18,17 +18,17 @@ rk.json (every key optional; relative paths are relative to the directory holdin
     "krt":    {"dir": "...", "python": "..."}     # KiCadRoutingTools location (else $KRT_DIR / $KRT_PY)
   }
 
-State (sessions, routed passes, extraction cache) lives in `$RK_HOME` or `<project dir>/.rk/`, never in the package.
+State (sessions, routed passes, extraction cache) lives in `$BADPCB_HOME` or `<project dir>/.badpcb/`, never in the package.
 
-Environment variables: RK_PROJECT, RK_HOME, KIPY (KiCad's python, has pcbnew), KICAD_CLI, KRT_DIR, KRT_PY,
-RK_NO_CACHE, RK_GSCORE_CELL, RK_PROGRESS_S.
+Environment variables: BADPCB_PROJECT, BADPCB_HOME, KIPY (KiCad's python, has pcbnew), KICAD_CLI, KRT_DIR, KRT_PY,
+BADPCB_NO_CACHE, BADPCB_GSCORE_CELL, BADPCB_PROGRESS_S.
 """
 import json
 import os
 import shutil
 import sys
 
-PROJECT_FILE = "rk.json"
+PROJECT_FILE = "badpcb.json"
 
 _KIPY_CANDIDATES = [
     "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3",   # macOS
@@ -41,7 +41,7 @@ _CLI_CANDIDATES = [
 ]
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-SOURCE_ROOT = os.path.dirname(PACKAGE_DIR)          # the directory that must be on PYTHONPATH for `-m rk.<mod>`
+SOURCE_ROOT = os.path.dirname(PACKAGE_DIR)          # the directory that must be on PYTHONPATH for `-m badpcb.<mod>`
 
 
 class Project:
@@ -65,8 +65,8 @@ class Project:
 
     @property
     def home(self):
-        h = os.environ.get("RK_HOME")
-        return os.path.abspath(h) if h else os.path.join(self.root, ".rk")
+        h = os.environ.get("BADPCB_HOME")
+        return os.path.abspath(h) if h else os.path.join(self.root, ".badpcb")
 
     @property
     def sessions_dir(self):
@@ -180,7 +180,7 @@ _current = None
 
 
 def find_project_file(start=None):
-    env = os.environ.get("RK_PROJECT")
+    env = os.environ.get("BADPCB_PROJECT")
     if env:
         return os.path.join(env, PROJECT_FILE) if os.path.isdir(env) else env
     d = os.path.abspath(start or os.getcwd())
@@ -195,13 +195,13 @@ def find_project_file(start=None):
 
 
 def load(path=None):
-    """Load (and make current) the project config; `path` = rk.json or a directory holding it."""
+    """Load (and make current) the project config; `path` = badpcb.json or a directory holding it."""
     global _current
     if path and os.path.isdir(path):
         path = os.path.join(path, PROJECT_FILE)
     path = path or find_project_file()
     if path and not os.path.isfile(path):
-        sys.exit("rk: project file not found: %s" % path)
+        sys.exit("badpcb: project file not found: %s" % path)
     data = {}
     if path:
         with open(path) as fh:
@@ -254,19 +254,19 @@ def kicad_cli_available():
 
 
 def kipy_run(args, **kw):
-    """Run `$KIPY -m <module> ...` with the rk package importable (works from source or when installed)."""
+    """Run `$KIPY -m <module> ...` with the badpcb package importable (works from source or when installed)."""
     import subprocess
     env = dict(os.environ)
     env["PYTHONPATH"] = SOURCE_ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
     if current().path:
-        env["RK_PROJECT"] = current().path
+        env["BADPCB_PROJECT"] = current().path
     kw.setdefault("capture_output", True)
     kw.setdefault("text", True)
     return subprocess.run([kipy()] + list(args), env=env, **kw)
 
 
 def use(data=None, root=None, path=None):
-    """Install an in-memory project (tests, embedding): `data` is the rk.json dict, `root` the directory relative paths refer to."""
+    """Install an in-memory project (tests, embedding): `data` is the badpcb.json dict, `root` the directory relative paths refer to."""
     global _current
     _current = Project(path, dict(data or {}))
     if root:

@@ -5,7 +5,7 @@ import re
 import tempfile
 import unittest
 
-from rk import groute, ratsnest
+from badpcb import groute, ratsnest
 from tests.synth import board, pad, part, singles
 
 HERE = os.path.dirname(os.path.abspath(__file__))

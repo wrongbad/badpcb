@@ -1,6 +1,6 @@
-"""Swap freedoms (declared in the project config, rk.json "swaps"), legality checks, and the MCU pin-order view.
+"""Swap freedoms (declared in the project config, badpcb.json "swaps"), legality checks, and the MCU pin-order view.
 
-    cfg  = load_config()                       # rk.json swaps (inline or file)
+    cfg  = load_config()                       # badpcb.json swaps (inline or file)
     gs   = groups(board, cfg)                  # {'adc': Group, 'en': Group, 'rc': Group}
     check(board, cfg, 'adc', {'ADC0': '52', 'ADC1': '49', ...}) -> [] if legal else [errors]
     b2   = apply(board, cfg, 'adc', assignment)            # new Board with the MCU pad nets rewritten
@@ -27,7 +27,7 @@ from . import config
 
 
 def load_config(path=None, board=None):
-    """Swap config of the project (rk.json "swaps": inline dict or file; defaults: no groups, no pin names), or of `path`.
+    """Swap config of the project (badpcb.json "swaps": inline dict or file; defaults: no groups, no pin names), or of `path`.
     With `board`: when the configured MCU is not on that board, the first auto-detected fine-pitch part stands in (groups dropped)."""
     if path:
         with open(path) as fh:

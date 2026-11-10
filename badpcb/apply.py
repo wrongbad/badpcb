@@ -1,13 +1,13 @@
-"""Session -> .kicad_pcb.   `python3 -m rk apply SESSION out.kicad_pcb [--in board] [--no-verify]`
+"""Session -> .kicad_pcb.   `python3 -m badpcb apply SESSION out.kicad_pcb [--in board] [--no-verify]`
 
-Two stages so that all rk logic stays in plain python3 and only the board edit needs pcbnew:
+Two stages so that all badpcb logic stays in plain python3 and only the board edit needs pcbnew:
   plan(state)            python3: diff of the session's final board vs. its base -> JSON plan
-  write(plan, in, out)   $KIPY (`$KIPY -m rk.apply --write plan.json in.kicad_pcb out.kicad_pcb report.json`)
-The orchestrator `run()` does both, then verifies: re-extracts the written board and compares rk metrics with the
+  write(plan, in, out)   $KIPY (`$KIPY -m badpcb.apply --write plan.json in.kicad_pcb out.kicad_pcb report.json`)
+The orchestrator `run()` does both, then verifies: re-extracts the written board and compares badpcb metrics with the
 session's METRICS, and diffs kicad-cli DRC (input vs output) so that new clearance/courtyard errors are visible.
 
 Plan contents: part placements (pos, rot, side), MCU pad net changes, plane vias (+stub tracks), deleted vias.
-Writer: moves/rotates/flips footprints (checked against rk's predicted pad positions, flip is guarded: the footprint
+Writer: moves/rotates/flips footprints (checked against badpcb's predicted pad positions, flip is guarded: the footprint
 must belong to a live board), re-nets pads, adds copper, then RIPS UP copper made wrong by the changes:
   * touching a changed pad (moved part or re-netted pin) of another net / of no net  -> removed (short)
   * attached (track end / via) to a pad of a moved part and no longer landing on a same-net pad -> removed (dangling)
@@ -86,7 +86,7 @@ def swaps_md(plan_, cfg):
     gp = lambda n: names.get(n, "?")
     L = ["# swaps_applied: board vs schematic divergence (session %s)" % plan_["session"], "",
          "The routed board differs from the netlist / schematic. Either regenerate the board from an updated netlist, or",
-         "update the netlist and firmware as below (rk applied these to pad nets of %s)." % (cfg["mcu"] or "the MCU"), "",
+         "update the netlist and firmware as below (badpcb applied these to pad nets of %s)." % (cfg["mcu"] or "the MCU"), "",
          "| net | old pin | old name | new pin | new name |", "|---|---|---|---|---|"]
     moved = sorted(ch, key=lambda n: (n.rstrip("0123456789"), int(n[len(n.rstrip("0123456789")):] or 0)))
     for n in moved:
@@ -164,7 +164,7 @@ def write(plan_, src, dst, lanes_path=None):
            "placement_mismatch": [], "flip_skipped": []}
     # zone outlines first: pcbnew's typed wrappers (Zones(), Cast_to_ZONE) stop working after footprints/tracks are edited
     if plan_.get("zones"):
-        zs = zones0                                                          # same order as rk.extract
+        zs = zones0                                                          # same order as badpcb.extract
         rep["zones_reshaped"] = []
         for zc in plan_["zones"]:
             z = zs[zc["idx"]]
@@ -393,7 +393,7 @@ def write(plan_, src, dst, lanes_path=None):
 
 # ============================================================================== orchestration (python3)
 def default_rules_pro(board_path=None):
-    """The .kicad_pro that grades a board: rk.json rules.project, else the board's own sibling .kicad_pro."""
+    """The .kicad_pro that grades a board: badpcb.json rules.project, else the board's own sibling .kicad_pro."""
     return config.current().rules_pro_for(board_path)
 
 
@@ -465,7 +465,7 @@ def run_lock_delta(session, src):
     rj = src.rsplit(".", 1)[0] + ".lockplan_report.json"
     json.dump(P, open(pj, "w"), indent=1)
     tmp = src.rsplit(".", 1)[0] + ".tmp_lock.kicad_pcb"
-    r = config.kipy_run(["-m", "rk.apply", "--write", pj, src, tmp, rj], cwd=config.current().root)
+    r = config.kipy_run(["-m", "badpcb.apply", "--write", pj, src, tmp, rj], cwd=config.current().root)
     if r.returncode or not os.path.exists(rj):
         sys.exit("apply writer failed:\n" + (r.stdout + r.stderr)[-3000:])
     os.replace(tmp, src)
@@ -482,7 +482,7 @@ def run(session, out, src=None, verify=True, report_path=None):
     pj = out.rsplit(".", 1)[0] + ".plan.json"
     rj = out.rsplit(".", 1)[0] + ".apply_report.json"
     json.dump(P, open(pj, "w"), indent=1)
-    r = config.kipy_run(["-m", "rk.apply", "--write", pj, src, out, rj], cwd=config.current().root)
+    r = config.kipy_run(["-m", "badpcb.apply", "--write", pj, src, out, rj], cwd=config.current().root)
     if r.returncode or not os.path.exists(rj):   # writer exits via os._exit(0), so a nonzero code is a real failure
         sys.exit("apply writer failed:\n" + (r.stdout + r.stderr)[-3000:])
     rep = json.load(open(rj))
@@ -529,7 +529,7 @@ def run(session, out, src=None, verify=True, report_path=None):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "--write":
-        from rk import kipy_exit
+        from badpcb import kipy_exit
         pj, src, dst, rj = argv[1:5]
         try:
             rep = write(json.load(open(pj)), src, dst)
@@ -541,7 +541,7 @@ def main(argv=None):
             kipy_exit.done(1)
         kipy_exit.done(0)
     import argparse
-    ap = argparse.ArgumentParser(prog="rk apply")
+    ap = argparse.ArgumentParser(prog="badpcb apply")
     ap.add_argument("session")
     ap.add_argument("out")
     ap.add_argument("--in", dest="src", default=None, help="input board (default: the session's base board)")

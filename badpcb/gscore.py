@@ -1,9 +1,9 @@
-"""groute as a command (`rk groute`) and as the fast routability score behind audit/suggest ranking.
+"""groute as a command (`badpcb groute`) and as the fast routability score behind audit/suggest ranking.
 
-    rk groute <session|board.kicad_pcb|model.json> [--cell 1.0] [--iters 30] [--time 30] [--nets EN*,SENSE*] [--region R8] [--hints h.json] [--json out]
+    badpcb groute <session|board.kicad_pcb|model.json> [--cell 1.0] [--iters 30] [--time 30] [--nets EN*,SENSE*] [--region R8] [--hints h.json] [--json out]
         a session is routed in its CURRENT state (placement after all `act`s) with the session's topology hints
         (corridor / layer / priority / freeze; `side`, `reserve`, `near` are not understood by groute and are listed as ignored).
-    rk audit S --gscore [SECONDS]  /  rk suggest S audit --gscore [SECONDS]
+    badpcb audit S --gscore [SECONDS]  /  badpcb suggest S audit --gscore [SECONDS]
         top-3 legal fixes of every ERR/WARN finding are re-scored by a short groute run on the finding's region (fix applied
         temporarily): overflow + 5 x no-path + 0.1 x history. Fixes are then ranked by that delta first, evaluate dscore second,
         and each shows `groute R8: score 12.3 -> 4.1 (ovf 9 -> 2)`. ~2 s per run on a 1 mm grid.
@@ -75,7 +75,7 @@ def rank_fixes(ac, findings, budget_s=60.0, per=3, cell=None):
     from .audit import Trial
     from .state import parse_specs
     import os
-    cell = cell or float(os.environ.get("RK_GSCORE_CELL", "1.0"))
+    cell = cell or float(os.environ.get("BADPCB_GSCORE_CELL", "1.0"))
     t_end = time.time() + budget_s
     hints, _n = hints_from_world(ac.w)
     cache, runs = {}, 0
@@ -142,5 +142,5 @@ def main_args(a):
         with open(a.json_out, "w") as fh:
             json.dump(res.to_json(), fh)
         print("wrote %s" % a.json_out)
-    print("(rk groute %.1fs)" % (time.time() - t0), file=sys.stderr)
+    print("(badpcb groute %.1fs)" % (time.time() - t0), file=sys.stderr)
     return 0

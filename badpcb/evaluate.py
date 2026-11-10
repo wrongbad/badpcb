@@ -381,7 +381,7 @@ def suggest(st, target, n=10, max_eval=40, budget_s=20.0):
     b = w.board
     notes, cands = [], []
     tl = target.strip()
-    if tl.lower() == "audit":                 # the placement linter's fixes as an eval table (rk/audit.py)
+    if tl.lower() == "audit":                 # the placement linter's fixes as an eval table (badpcb/audit.py)
         from . import audit
         return audit.suggest(st, n, max_eval, budget_s)
     groups = {g: G for g, G in w.groups().items() if G.kind in ("pin_permutation", "pin_assignment")}

@@ -1,7 +1,7 @@
-# History: how rk got here (case study: the key_board PCB)
+# History: how badpcb got here (case study: the key_board PCB)
 
 The board: 298x84 mm, 4 layers (In1 GND, In2 +3V3/+3V3A), 58 sensors on B.Cu, an RP2350B (QFN-80, 0.4 mm pitch) at U1, 8 EN lines x 8 ADC lines.
-Freerouting ran for hours and left many nets open. rk was built so an LLM agent could steer routing with text and named handles instead.
+Freerouting ran for hours and left many nets open. badpcb was built so an LLM agent could steer routing with text and named handles instead.
 Numbers below are that board's; the lessons are general.
 
 ## Phases
@@ -10,14 +10,14 @@ Numbers below are that board's; the lessons are general.
 2. **Actions + what-if**: typed reversible actions (move/rot/flip/swap/assign/via...), sessions with undo/snapshot/branch/revert, `eval` (delta metrics
    without committing; incremental result == from-scratch result is a test).
 3. **Global router**: PathFinder negotiated congestion on a coarse multilayer grid; history costs turn into "who blocks whom" explanations.
-4. **Detailed routing**: no own router; scoped KiCadRoutingTools passes translated back into rk vocabulary; DRC always graded against the ORIGINAL rules
+4. **Detailed routing**: no own router; scoped KiCadRoutingTools passes translated back into badpcb vocabulary; DRC always graded against the ORIGINAL rules
    (KRT writes a lowered .kicad_pro; qfn_fanout does too, which made the next pass escalate to 0.10 mm everywhere: 161 DRC errors until droute restored the rules).
 5. **Rules, feasibility, locks, pad-level legality**: the fan-out was infeasible under the default rules (stubs 0.283 mm apart, needing 0.35): a local
    0.10/0.10 rule area fixed it, no placement change could have. Locked scripted lanes made every net that owned one "protected" for KRT: unlocking
    lanes took 65 open connections to 6, more than any placement work.
 6. **Audit**: placement linter (ESCAPE, PLANE, BOWTIE, ORIENT, TENSION, ROLES, BUSORDER, COURTYARD, DENSITY), each finding with a fix list, its
    evaluate delta and a legality verdict.
-7. **Tools lane**: joint placement plans (`rk plan`), plane-zone edits (`reshape`), incremental repair (`droute --repair`), the ping-pong ladder
+7. **Tools lane**: joint placement plans (`badpcb plan`), plane-zone edits (`reshape`), incremental repair (`droute --repair`), the ping-pong ladder
    (plain -> repair -> strip+fanout -> change the board), groute scoring of audit fixes, drag-with-move, progress output.
 
 ## The steered run (21 passes)

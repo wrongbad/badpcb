@@ -1,6 +1,6 @@
 import unittest
 
-from rk import ratsnest
+from badpcb import ratsnest
 from tests.synth import board, pad, part, singles, track, via, zone
 
 

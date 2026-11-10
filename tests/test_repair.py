@@ -1,7 +1,7 @@
 """repair.plan: rips only unlocked, non-plane copper near the open connection ends; strategy ladder."""
 import unittest
 
-from rk import ratsnest, repair
+from badpcb import ratsnest, repair
 from tests import synth
 
 
@@ -58,14 +58,14 @@ class Ladder(unittest.TestCase):
         h[-1]["mode"] = "repair"
         self.assertIn("--strip", repair.strategy(h, ["ADC7"], "U1", "s1"))
         h[-1]["mode"] = "strip"
-        self.assertIn("rk plan s1", repair.strategy(h, ["ADC7"], None, "s1"))
+        self.assertIn("badpcb plan s1", repair.strategy(h, ["ADC7"], None, "s1"))
 
 
 class Advice(unittest.TestCase):
     def test_escape_advice_and_progress(self):
         import os
         import tempfile
-        from rk import droute
+        from badpcb import droute
         placed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "key_board_placed.model.json")
         if os.path.exists(placed):
             out = repair.escape_advice(placed, ["ADC0", "ADC1", "ADC2", "ADC3", "ADC4", "ADC5", "ADC6", "ADC7"], "U1")

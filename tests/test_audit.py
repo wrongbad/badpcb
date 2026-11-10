@@ -4,7 +4,7 @@ import io
 import os
 import unittest
 
-from rk import audit, cli, state
+from badpcb import audit, cli, state
 from tests import synth
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -254,7 +254,7 @@ class Wiring(unittest.TestCase):
         rep = audit.run(st)
         txt = audit.text(rep)
         self.assertLessEqual(len(txt), 62)
-        self.assertTrue(txt[0].startswith("rk audit"))
+        self.assertTrue(txt[0].startswith("badpcb audit"))
         j = audit.as_json(rep)
         self.assertEqual(len(j["findings"]), len(rep.findings))
         self.assertIn("fixes", j["findings"][0])
@@ -264,7 +264,7 @@ class Wiring(unittest.TestCase):
         # nothing was committed
         self.assertEqual(st.step(), 0)
         # the table feeds `act @1`
-        from rk import evaluate
+        from badpcb import evaluate
         res2, _ = evaluate.suggest(st, "audit")
         st.last = [r.label for r in res2]
         r = st.act("@1")
@@ -287,7 +287,7 @@ if __name__ == "__main__":
 
 class Joint(unittest.TestCase):
     def build(self):
-        from rk import joint  # noqa
+        from badpcb import joint  # noqa
         nets = ["s%d" % i for i in range(10)]
         parts = [qfn("U9", 50, 25, nets)]
         for k, x in enumerate((48.4, 49.6, 50.8, 52.0)):                       # series Rs parked in the north fan
@@ -297,7 +297,7 @@ class Joint(unittest.TestCase):
         return stage(parts)
 
     def test_joint_plan_clears_fan_and_roles_and_applies(self):
-        from rk import joint
+        from badpcb import joint
         st = self.build()
         ac, acts, txt = joint.run(st, ["U9"], 1.5, name="t_audit")
         self.assertTrue(acts, txt)
@@ -315,7 +315,7 @@ class Joint(unittest.TestCase):
             self.assertGreaterEqual(min(bb[0] - x0, bb[1] - y0, x1 - bb[2], y1 - bb[3]), 1.5 - 1e-6)
 
     def test_minimal_moves_only_blockers(self):
-        from rk import joint
+        from badpcb import joint
         st = self.build()
         _ac, acts, txt = joint.run(st, ["U9"], 1.5, name="t_audit", minimal=True)
         full = joint.run(st, ["U9"], 1.5, name="t_audit")[1]
@@ -323,14 +323,14 @@ class Joint(unittest.TestCase):
         self.assertLessEqual(len(acts), len(full))
 
     def test_world_is_restored(self):
-        from rk import joint
+        from badpcb import joint
         st = self.build()
         before = {r: (p.pos, p.rot) for r, p in st.world.board.parts.items()}
         joint.run(st, ["U9"], 1.5)
         self.assertEqual(before, {r: (p.pos, p.rot) for r, p in st.world.board.parts.items()})
 
     def test_delvia_stub_text_roundtrip(self):
-        from rk import actions as A
+        from badpcb import actions as A
         a = A.parse("delvia GND 10 20 stub")[0]
         self.assertTrue(a.a.get("stub"))
         self.assertEqual(a.compact(), "delvia GND 10 20 stub")
@@ -346,7 +346,7 @@ class Reshape(unittest.TestCase):
         self.assertTrue(any("lose their plane" in w for w in r["warnings"]) or r["delta"]["stubs"] <= 0)
         zA = [z for z in b.zones if z.net == "+3V3A"][0]
         z3 = [z for z in b.zones if z.net == "+3V3"][0]
-        from rk import actions as A
+        from badpcb import actions as A
         self.assertTrue(A._in_zone(b, "+3V3A", (20, 20)))
         self.assertFalse(A._in_zone(b, "+3V3", (20, 20)))
         self.assertTrue(A._in_zone(b, "+3V3", (10, 10)))
@@ -357,7 +357,7 @@ class Reshape(unittest.TestCase):
 
     def test_sub_and_errors(self):
         st = Plane.board(Plane(), 20)
-        from rk import actions as A
+        from badpcb import actions as A
         r = st.act("reshape +3V3 sub 0,0,5,5")           # corner cut: pieces, no hole
         b = st.world.board
         self.assertFalse(A._in_zone(b, "+3V3", (2, 2)))
@@ -377,7 +377,7 @@ class Reshape(unittest.TestCase):
         self.assertTrue(fx.acts[0].startswith("reshape +3V3A add") and any(a.startswith("via +3V3A") for a in fx.acts[1:]))
 
     def test_apply_plan_carries_zone_edits(self):
-        from rk import apply as AP
+        from badpcb import apply as AP
         st = Plane.board(Plane(), 20)
         st.act("reshape +3V3A add 18,18,23,23 layer=In2.Cu")
         P = AP.plan(st)
@@ -386,7 +386,7 @@ class Reshape(unittest.TestCase):
 
 class GScore(unittest.TestCase):
     def test_hints_and_rank_and_cli(self):
-        from rk import gscore
+        from badpcb import gscore
         nets = ["s%d" % i for i in range(10)]
         parts = [qfn("U9", 50, 25, nets)]
         for k, x in enumerate((48.4, 49.6, 50.8, 52.0)):

@@ -1,9 +1,9 @@
-"""rk joint: solve the placement findings of one IC together (ESCAPE intruders + ROLES decaps/filter caps + edge margin + plane stubs).
+"""badpcb joint: solve the placement findings of one IC together (ESCAPE intruders + ROLES decaps/filter caps + edge margin + plane stubs).
 
-    python3 -m rk audit <session|board> --joint [U1[,U2..]] [--edge 1.5]
-    rk plan <session> [U1[,U2..]] [--edge 1.5]          (same thing)
+    python3 -m badpcb audit <session|board> --joint [U1[,U2..]] [--edge 1.5]
+    badpcb plan <session> [U1[,U2..]] [--edge 1.5]          (same thing)
 
-Why: the per-finding fixes of `rk audit` fight each other (ESCAPE pushes a filter cap out of the fan zone, ROLES pulls it
+Why: the per-finding fixes of `badpcb audit` fight each other (ESCAPE pushes a filter cap out of the fan zone, ROLES pulls it
 back in; both happily land the part on the board edge; a moved decap strands its plane-via stub). Here every part that
 is wanted near the IC is placed in ONE pass against the same constraints:
   * pads outside every fine-pitch escape zone (grown by 0.3 mm), courtyard at least `edge` mm from the board edge,
@@ -305,7 +305,7 @@ def run(st, refs=None, edge=1.5, name=None, minimal=False):
                 refs.append(a)
     before_z, before_v = _state_numbers(ac, refs)
     acts, rows, failed = solve(ac, refs, edge, minimal=minimal)
-    L = ["rk joint plan %s: IC %s, edge margin %.1f mm%s" % (name or st.name, ",".join(refs), edge, ", MINIMAL (only the parts blocking a stub + their filter caps)" if minimal else "")]
+    L = ["badpcb joint plan %s: IC %s, edge margin %.1f mm%s" % (name or st.name, ",".join(refs), edge, ", MINIMAL (only the parts blocking a stub + their filter caps)" if minimal else "")]
     for ref, why, old, new, d, lim, ns, rlx in rows:
         L.append("  %-4s %-14s (%.2f,%.2f)@%g -> (%.2f,%.2f)@%g  pin %.1f%s mm%s%s" % (
             ref, why, old[0][0], old[0][1], old[1], new[0][0], new[0][1], new[1], d, "/%g" % lim if lim else "",
@@ -332,7 +332,7 @@ def run(st, refs=None, edge=1.5, name=None, minimal=False):
     r = fx.res
     L.append("evaluate: %s  dscore %+.1f (%s)  %s" % ("legal" if r.ok else "ILLEGAL", r.dscore, AU.fmt_delta(r.d),
                                                       "; ".join(r.warnings[:2])[:120] if r.warnings else ""))
-    L.append("apply: rk act %s '%s'" % (name or st.name, "; ".join(acts)))
+    L.append("apply: badpcb act %s '%s'" % (name or st.name, "; ".join(acts)))
     L.append("(%d moves, %.1fs)" % (len(rows), time.time() - t0))
     return ac, acts, "\n".join(L)
 

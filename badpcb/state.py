@@ -1,6 +1,6 @@
 """Session state: base board + action log (+ hints, later routes), with snapshots, branches, revert and diff.
 
-    st = State.new("s1", "key_board_placed.kicad_pcb")      # writes .rk/sessions/s1.json
+    st = State.new("s1", "key_board_placed.kicad_pcb")      # writes .badpcb/sessions/s1.json
     st = State.load("s1")                                    # replays the log on the base board (~0.5 s)
     r = st.act("move R17 152 40.5")                          # atomic; returns {"before","after","delta","warnings",...}
     st.undo(); st.snapshot("a"); st.revert("a"); st.revert(3); st.branch("alt"); st.switch("main")
@@ -21,7 +21,7 @@ from . import ratsnest, topo
 
 from . import config
 
-SESSION_DIR = None          # override (tests); default: <rk home>/sessions
+SESSION_DIR = None          # override (tests); default: <badpcb home>/sessions
 
 
 def session_dir():
@@ -100,7 +100,7 @@ class State:
     def load(cls, name):
         path = session_path(name)
         if not os.path.exists(path):
-            raise A.ActionError("no session '%s' (looked for %s). Create one: rk session new %s <board>" % (name, path, name))
+            raise A.ActionError("no session '%s' (looked for %s). Create one: badpcb session new %s <board>" % (name, path, name))
         with open(path) as fh:
             d = json.load(fh)
         from . import cli
@@ -197,7 +197,7 @@ class State:
         return nets, e
 
     def _keep_prev(self):
-        """Safety net: the tip before an undo/revert stays reachable as snapshot '_prev' (`rk revert S _prev` = redo)."""
+        """Safety net: the tip before an undo/revert stays reachable as snapshot '_prev' (`badpcb revert S _prev` = redo)."""
         if self.log:
             self.snapshots["_prev"] = {"log": [self._ser(e) for e in self.log], "m": self.metrics(), "t": time.time(), "step": self.step()}
 

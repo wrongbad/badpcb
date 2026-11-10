@@ -1,8 +1,8 @@
-"""CLI: `rk report <board.kicad_pcb | model.json> [--json] [--section NAME]` (run from the board project directory).
+"""CLI: `badpcb report <board.kicad_pcb | model.json> [--json] [--section NAME]` (run from the board project directory).
 
 Sections: feasibility summary clusters copper cuts inversions planes mcu map  (and, full-only: matrix regions conns).
-A .kicad_pcb is extracted with $KIPY (cached in <rk home>/cache by mtime); a .json is loaded directly.
-Project settings (rk.json), state directory (.rk/) and external tools: see rk/config.py.
+A .kicad_pcb is extracted with $KIPY (cached in <badpcb home>/cache by mtime); a .json is loaded directly.
+Project settings (badpcb.json), state directory (.badpcb/) and external tools: see badpcb/config.py.
 """
 import argparse
 import hashlib
@@ -24,8 +24,8 @@ def extract_to_cache(path):
     out = os.path.join(cache, "%s.%s.model.json" % (os.path.basename(path).rsplit(".", 1)[0], tag))
     if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(path):
         if not config.kipy_available():
-            sys.exit("rk: KiCad's python (pcbnew) not found: set $KIPY (tried %s)" % config.kipy())
-        r = config.kipy_run(["-m", "rk.extract", path, out], cwd=config.current().root)
+            sys.exit("badpcb: KiCad's python (pcbnew) not found: set $KIPY (tried %s)" % config.kipy())
+        r = config.kipy_run(["-m", "badpcb.extract", path, out], cwd=config.current().root)
         if r.returncode:
             sys.exit("extract failed:\n" + r.stderr[-2000:])
     return out
@@ -64,7 +64,7 @@ class Ctx:
 
     @property
     def eff(self):
-        """Effective rules: Default netclass + board minimums (.kicad_pro) + simple .kicad_dru area rules (rk/feas.py)."""
+        """Effective rules: Default netclass + board minimums (.kicad_pro) + simple .kicad_dru area rules (badpcb/feas.py)."""
         if not hasattr(self, "_eff"):
             from . import feas, apply as _ap
             self._eff = feas.load_rules(self.rules_pro or _ap.default_rules_pro(self.board.source), self.board)
@@ -222,7 +222,7 @@ def sec_mcu(c, full):
     b = c.board
     ref = c.cfg["mcu"]
     if ref not in b.parts:
-        return ["no MCU part (set \"mcu\" in rk.json%s)" % ("; '%s' is not on this board" % ref if ref else "")]
+        return ["no MCU part (set \"mcu\" in badpcb.json%s)" % ("; '%s' is not on this board" % ref if ref else "")]
     pc = swaps.pin_cycle(b, ref, c.cfg)
     plane = set(b.plane_nets())
     sig = [(n, nm, net) for n, nm, net, _ in pc if net and net not in plane]
@@ -369,7 +369,7 @@ def cmd_suggest(a):
     st.last = [r.label for r in res]
     st.save()
     if res:
-        print("apply row N with: rk act %s @N" % a.session)
+        print("apply row N with: badpcb act %s @N" % a.session)
     print("(%.2fs)" % (time.time() - t0), file=sys.stderr)
 
 
@@ -398,7 +398,7 @@ def cmd_revert(a):
 def cmd_branch(a):
     st = _load(a.session)
     st.branch(a.name)
-    print("now on branch '%s' (forked at step %d); main/other branches kept: rk switch %s <name>" % (a.name, st.step(), a.session))
+    print("now on branch '%s' (forked at step %d); main/other branches kept: badpcb switch %s <name>" % (a.name, st.step(), a.session))
 
 
 def cmd_switch(a):
@@ -495,7 +495,7 @@ def cmd_report_session(a, st):
     print("METRICS " + state.fmt_metrics(st.metrics()))
     hs = actions.describe_hints(st.world)
     if hs:
-        print("  %d hint(s) recorded for groute (rk show %s)" % (len(hs), st.name))
+        print("  %d hint(s) recorded for groute (badpcb show %s)" % (len(hs), st.name))
     return c
 
 
@@ -504,8 +504,8 @@ def main(argv=None):
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
         pass
-    ap = argparse.ArgumentParser(prog="rk", description="routing kernel CLI. Project config: rk.json (cwd or --project); state in .rk/ (sessions, routes, cache; RK_HOME overrides)")
-    ap.add_argument("--project", default=None, metavar="PATH", help="rk.json (or the directory holding it); default: rk.json in the cwd or a parent, else $RK_PROJECT, else defaults")
+    ap = argparse.ArgumentParser(prog="badpcb", description="routing kernel CLI. Project config: badpcb.json (cwd or --project); state in .badpcb/ (sessions, routes, cache; BADPCB_HOME overrides)")
+    ap.add_argument("--project", default=None, metavar="PATH", help="badpcb.json (or the directory holding it); default: badpcb.json in the cwd or a parent, else $BADPCB_PROJECT, else defaults")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("report", help="print the topology report for a board file or a session")
     r.add_argument("board", help=".kicad_pcb / model.json path, or a session name")
@@ -513,7 +513,7 @@ def main(argv=None):
     r.add_argument("--section", choices=sorted(SECTIONS))
     r.add_argument("--full", action="store_true", help="no truncation (default for sections is the same short form as the full report)")
     r.add_argument("--assume-planes", default="", help="comma list of nets to treat as plane nets when the board has no zones, e.g. GND,+3V3,+3V3A")
-    r.add_argument("--rules-pro", default=None, help=".kicad_pro (+ sibling .kicad_dru) giving the effective rules (default: rules.project in rk.json, else the board's own .kicad_pro)")
+    r.add_argument("--rules-pro", default=None, help=".kicad_pro (+ sibling .kicad_dru) giving the effective rules (default: rules.project in badpcb.json, else the board's own .kicad_pro)")
     r.add_argument("--cell", type=float, default=21.0, help="target region size in mm")
     s = sub.add_parser("session", help="new NAME BOARD | ls | rm NAME")
     s.add_argument("sub", choices=["new", "ls", "rm"])
@@ -522,11 +522,11 @@ def main(argv=None):
     s.add_argument("--force", action="store_true")
     s.add_argument("--assume-planes", default="")
     s.add_argument("--cell", type=float, default=21.0)
-    x = sub.add_parser("act", help="apply actions: rk act S 'move R17 152 40.5' ['rot C27 90' ...] (each arg = one step; ';' = atomic group)")
+    x = sub.add_parser("act", help="apply actions: badpcb act S 'move R17 152 40.5' ['rot C27 90' ...] (each arg = one step; ';' = atomic group)")
     x.add_argument("session")
     x.add_argument("specs", nargs="+")
     x.add_argument("--force", action="store_true", help="override locked-part checks")
-    x = sub.add_parser("eval", help="what-if: rk eval S 'move R17 152 40' 'rot C27 90; move C27 150 20' ... (nothing applied)")
+    x = sub.add_parser("eval", help="what-if: badpcb eval S 'move R17 152 40' 'rot C27 90; move C27 150 20' ... (nothing applied)")
     x.add_argument("session")
     x.add_argument("cands", nargs="+")
     x = sub.add_parser("suggest", help="ranked candidates for a net / part / group (adc,en) / cluster K1 / region R8 / planes / the MCU ref")
@@ -534,24 +534,24 @@ def main(argv=None):
     x.add_argument("target")
     x.add_argument("-n", type=int, default=10)
     x.add_argument("--max-eval", type=int, default=40)
-    x.add_argument("--gscore", nargs="?", const=60.0, type=float, default=0.0, metavar="SECONDS", help="target 'audit': rank fixes by a groute score (rk/gscore.py)")
-    x = sub.add_parser("audit", help="placement linter: rk audit <board|session> [--json] [--full] [--roles] [--groute] [--only ESCAPE,PLANE,..]")
+    x.add_argument("--gscore", nargs="?", const=60.0, type=float, default=0.0, metavar="SECONDS", help="target 'audit': rank fixes by a groute score (badpcb/gscore.py)")
+    x = sub.add_parser("audit", help="placement linter: badpcb audit <board|session> [--json] [--full] [--roles] [--groute] [--only ESCAPE,PLANE,..]")
     x.add_argument("target", help=".kicad_pcb / model.json path or a session name")
     x.add_argument("--json", action="store_true")
     x.add_argument("--full", action="store_true")
     x.add_argument("--roles", action="store_true", help="print the inferred part roles (decap, filter cap, crystal load, ...)")
     x.add_argument("--groute", action="store_true", help="also run groute (1 mm, short) and compare its hot spots with the audit's")
     x.add_argument("--only", default="", help="comma list of detectors: ESCAPE,PLANE,BOWTIE,ORIENT,TENSION,ROLES,BUSORDER,COURTYARD,DENSITY")
-    x.add_argument("--gscore", nargs="?", const=60.0, type=float, default=0.0, metavar="SECONDS", help="re-rank each finding's fixes by a short groute run on its region (rk/gscore.py), within this time budget")
-    x.add_argument("--joint", nargs="?", const="", default=None, metavar="REF[,REF]", help="instead of the audit: one joint placement plan for the IC's fan intruders + decaps/filter caps (rk/joint.py)")
+    x.add_argument("--gscore", nargs="?", const=60.0, type=float, default=0.0, metavar="SECONDS", help="re-rank each finding's fixes by a short groute run on its region (badpcb/gscore.py), within this time budget")
+    x.add_argument("--joint", nargs="?", const="", default=None, metavar="REF[,REF]", help="instead of the audit: one joint placement plan for the IC's fan intruders + decaps/filter caps (badpcb/joint.py)")
     x.add_argument("--edge", type=float, default=1.5, help="--joint: keep parts' courtyards this far (mm) from the board edge")
     x.add_argument("--minimal", action="store_true", help="--joint: move only the parts that block a signal stub + their filter caps")
-    x = sub.add_parser("plan", help="joint placement plan for an IC: rk plan <session|board> [REF[,REF]] [--edge 1.5]  (= audit --joint)")
+    x = sub.add_parser("plan", help="joint placement plan for an IC: badpcb plan <session|board> [REF[,REF]] [--edge 1.5]  (= audit --joint)")
     x.add_argument("target")
     x.add_argument("refs", nargs="?", default="")
     x.add_argument("--edge", type=float, default=1.5)
     x.add_argument("--minimal", action="store_true", help="move only the parts that block a signal stub of the fan + their filter caps")
-    x = sub.add_parser("groute", help="global router (PathFinder) on a session's current state + its hints, or a board: rk groute S [--region R8] [--nets EN*] [--time 30] [--no-map]")
+    x = sub.add_parser("groute", help="global router (PathFinder) on a session's current state + its hints, or a board: badpcb groute S [--region R8] [--nets EN*] [--time 30] [--no-map]")
     x.add_argument("target")
     x.add_argument("--cell", type=float, default=1.0)
     x.add_argument("--iters", type=int, default=30)
@@ -588,7 +588,7 @@ def main(argv=None):
     x.add_argument("--full", action="store_true")
     x = sub.add_parser("log", help="trajectory: metrics after each step")
     x.add_argument("session")
-    x = sub.add_parser("spots", help="legal places for a part near a point: rk spots S R26 157 14 [--pad 2]")
+    x = sub.add_parser("spots", help="legal places for a part near a point: badpcb spots S R26 157 14 [--pad 2]")
     x.add_argument("session")
     x.add_argument("ref")
     x.add_argument("x", type=float)
@@ -597,14 +597,14 @@ def main(argv=None):
     x = sub.add_parser("show", help="session status; or details of a part (R17) or net (ADC0)")
     x.add_argument("session")
     x.add_argument("what", nargs="?")
-    x = sub.add_parser("apply", help="write a session's final state to a .kicad_pcb: rk apply S out.kicad_pcb [--in board] [--no-verify]")
+    x = sub.add_parser("apply", help="write a session's final state to a .kicad_pcb: badpcb apply S out.kicad_pcb [--in board] [--no-verify]")
     x.add_argument("session")
     x.add_argument("out")
     x.add_argument("--in", dest="src", default=None)
     x.add_argument("--no-verify", action="store_true")
-    x = sub.add_parser("droute", help="detailed routing with KiCadRoutingTools: rk droute <session|board> [--nets ..] [--component R] [--region R8] [--preview] [--time S]")
+    x = sub.add_parser("droute", help="detailed routing with KiCadRoutingTools: badpcb droute <session|board> [--nets ..] [--component R] [--region R8] [--preview] [--time S]")
     x.add_argument("target", help="session name or .kicad_pcb")
-    x.add_argument("--out", default=None, help="output board (default: <rk home>/routes/<name>_dr.kicad_pcb, chained by default)")
+    x.add_argument("--out", default=None, help="output board (default: <badpcb home>/routes/<name>_dr.kicad_pcb, chained by default)")
     x.add_argument("--nets", nargs="*", default=[])
     x.add_argument("--component", nargs="*", default=[])
     x.add_argument("--region", default=None, help="region handle (R8) or x0,y0,x1,y1 mm: route the nets with a pad inside")
@@ -612,13 +612,13 @@ def main(argv=None):
     x.add_argument("--time", type=float, default=300.0, help="wall-clock cap in seconds")
     x.add_argument("--extra", default="", help="extra raw args for KRT route.py")
     x.add_argument("--fanout", default=None, metavar="REF", help="run KRT qfn_fanout on REF's in-scope nets first (fine-pitch escape stubs)")
-    x.add_argument("--rules-pro", default=None, help=".kicad_pro whose rules DRC is graded against (default: rules.project in rk.json, else the board's own .kicad_pro)")
-    x.add_argument("--grid", default="auto", help="KRT --grid-step mm; auto = coarsest grid that resolves the fine-pitch pads in the scope (rk feasibility)")
+    x.add_argument("--rules-pro", default=None, help=".kicad_pro whose rules DRC is graded against (default: rules.project in badpcb.json, else the board's own .kicad_pro)")
+    x.add_argument("--grid", default="auto", help="KRT --grid-step mm; auto = coarsest grid that resolves the fine-pitch pads in the scope (badpcb feasibility)")
     x.add_argument("--strip", action="store_true", help="first delete the existing copper of the scope's non-plane nets (so --fanout escapes them all together)")
-    x.add_argument("--repair", action="store_true", help="incremental repair of a routed board: rip only the unlocked copper within --radius of the open connection ends, re-route that group (rk/repair.py)")
+    x.add_argument("--repair", action="store_true", help="incremental repair of a routed board: rip only the unlocked copper within --radius of the open connection ends, re-route that group (badpcb/repair.py)")
     x.add_argument("--radius", type=float, default=4.0, help="--repair: disk radius (mm) around both ends of each open connection")
     x.add_argument("--fresh", action="store_true", help="restart from the freshly applied session board (drop earlier passes)")
-    x.add_argument("--measure", dest="measure_only", action="store_true", help="only print the METRICS line (rk + DRC) of the board `target`")
+    x.add_argument("--measure", dest="measure_only", action="store_true", help="only print the METRICS line (badpcb + DRC) of the board `target`")
     x.add_argument("--from-board", default=None, help="start from this board instead of the session-applied one")
     sub.add_parser("project", help="show the resolved project config, state directory and external tools")
     a = ap.parse_args(argv)
@@ -657,7 +657,7 @@ def cmd_project(a):
     P = config.current()
     print("project file : %s" % (P.path or "(none: defaults; state under the cwd)"))
     print("project root : %s" % P.root)
-    print("rk home      : %s  (sessions, routes, cache)" % P.home)
+    print("state dir    : %s  (sessions, routes, cache)" % P.home)
     print("board        : %s" % (P.board or "-"))
     print("rules project: %s" % (P.rules_pro or "(each board's own .kicad_pro)"))
     print("mcu          : %s    fine-pitch parts: %s" % (P.mcu or "-", ",".join(P.data.get("fine_pitch_parts") or []) or "(auto-detect)"))
@@ -685,7 +685,7 @@ def report_main(a):
     for n in names:
         print("== %s ==" % n)
         print("\n".join(SECTIONS[n](c, a.full)))
-    print("(rk report %.1fs)" % (time.time() - t0), file=sys.stderr)
+    print("(badpcb report %.1fs)" % (time.time() - t0), file=sys.stderr)
 
 
 if __name__ == "__main__":

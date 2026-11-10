@@ -1,7 +1,7 @@
 """Lock awareness: classify existing copper and explain which locked copper blocks a connection.
 
 Classes (Track.cls / Via.cls, set by `classify`; independent of the current lock flag so that an unlocked lane is still a lane):
-  <configured classes>  copper whose uuids a project lists in rk.json "locks.classes" ({"lane": "lanes.json", "mimic": "mimic.json:copied"},
+  <configured classes>  copper whose uuids a project lists in badpcb.json "locks.classes" ({"lane": "lanes.json", "mimic": "mimic.json:copied"},
                         file = JSON list of uuids or dict, optional ":key"); first match in config order wins. Conventional names:
                         `lane` = scripted trunk copper (apply keeps it unless shorted; `trim-lanes` works on it), `mimic` = copied reference copper
   fanout  every other locked copper item (fan-out stubs, plane vias)
@@ -10,7 +10,7 @@ Classes (Track.cls / Via.cls, set by `classify`; independent of the current lock
 `unlock TARGET` / `lock TARGET` flip the lock flag of the matching copper (apply.py writes that to the board, so KRT may rip it);
 TARGET = class (lanes|mimic|fanout|all), a net / glob (SENSE4, EN*), a region (R8) or a box x0,y0,x1,y1.
 `trim-lanes` deletes lane segments past the last key of each lane and lane ends that sit on another net's pad/via
-(rk.json "locks.trim": {"nets": regex of lane nets to trim, "key_parts": regex of the refdes that count as keys, "start_part": ref a trunk starts at}).
+(badpcb.json "locks.trim": {"nets": regex of lane nets to trim, "key_parts": regex of the refdes that count as keys, "start_part": ref a trunk starts at}).
 """
 import fnmatch
 import json

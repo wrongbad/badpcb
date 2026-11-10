@@ -11,15 +11,15 @@ Geometry actions (all coordinates mm, +Y down, rotation degrees CCW on screen as
   nudge REF DX DY         relative move
   rot REF DEG             absolute orientation (`rot C27 90`); with a sign it is relative (`rot C27 +90`, `rot C27 -90`)
   flip REF                other board side (mirrors the footprint)
-Pin actions on the MCU (groups from the project's swap config, rk.json "swaps"; example ids adc, en):
+Pin actions on the MCU (groups from the project's swap config, badpcb.json "swaps"; example ids adc, en):
   swap GROUP NETA NETB    exchange the MCU pins of two nets (`swap adc ADC0 ADC1`; group optional if the nets name it)
   assign GROUP NET PIN    move NET to another (free) pin (`assign en EN3 U1.12` or `assign en EN3 12`)
   keys PART_A PART_B      swap the key-group nets of two parts (needs a key_assignment group with net_regex in the swap config)
   via NET X Y [pad=U1.5]  add a plane via; with pad= a short stub track joins it to that pad
-Plane zone edit (rk/actions.py reshape; apply rewrites the zone outlines, then refills):
+Plane zone edit (badpcb/actions.py reshape; apply rewrites the zone outlines, then refills):
   reshape NET add X0,Y0,X1,Y1 [layer=In2.Cu]   box becomes NET's: added to NET's zone and carved out of the other zones on that layer
   reshape NET sub X0,Y0,X1,Y1 [layer=In2.Cu]   box removed from NET's zone only
-Copper lock actions (rk/locks.py; `rk apply` writes the lock flags, KRT treats locked copper as unrippable):
+Copper lock actions (badpcb/locks.py; `badpcb apply` writes the lock flags, KRT treats locked copper as unrippable):
   unlock TARGET   TARGET = class (lanes|mimic|fanout|all), net or glob (SENSE4, EN*), region (R8) or box x0,y0,x1,y1
   lock TARGET     inverse of unlock
   trim-lanes      delete lane segments past the last key of each lane and lane ends sitting on another net's pad/via
@@ -29,7 +29,7 @@ Topology hints (stored in World.hints for groute; they never change the ratsnest
   near REF TO MAXMM             (extra) keep-within constraint: later moves of REF/TO that break it are refused
 Append `force` to override locked-part / track warnings. `clear` removes a hint.
 Legality: part inside the board, no *new* courtyard overlap with another part on the same side
-(bbox approximation), no *new* pad-level conflict (pad-to-pad incl. through-hole, pad-to-foreign-copper, holes, edge; rk/legal.py), locked parts refused unless forced, swap-group rules from swaps.py, vias clear of
+(bbox approximation), no *new* pad-level conflict (pad-to-pad incl. through-hole, pad-to-foreign-copper, holes, edge; badpcb/legal.py), locked parts refused unless forced, swap-group rules from swaps.py, vias clear of
 foreign copper and inside the plane zone of their net. Moving a part by <= 1 mm stretches the tracks attached to its pads
 (unless the end is a junction/via or the stretched segment would violate clearance); larger moves leave them in place (warning, apply rips them).
 """
@@ -816,7 +816,7 @@ def check(world, act):
     elif op == "reassign_keys":
         pa, pb = _key_pad(b, a["a"], world), _key_pad(b, a["b"], world)
         if _key_rx(world) is None:
-            errs.append("keys: the project has no key_assignment group with a net_regex in its swap config (rk.json)")
+            errs.append("keys: the project has no key_assignment group with a net_regex in its swap config (badpcb.json)")
         elif pa is None or pb is None:
             errs.append("%s/%s: need two parts with a pad on a key-assignment net" % (a["a"], a["b"]))
         elif pa.net == pb.net:

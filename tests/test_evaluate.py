@@ -7,9 +7,9 @@ import tempfile
 import time
 import unittest
 
-from rk import actions as A
-from rk import engine as E
-from rk import ratsnest, state, topo, evaluate
+from badpcb import actions as A
+from badpcb import engine as E
+from badpcb import ratsnest, state, topo, evaluate
 from tests import synth
 
 PLACED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "key_board_placed.model.json")

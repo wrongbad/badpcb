@@ -1,6 +1,6 @@
 """Incremental repair of a routed board: rip only the copper around the still-open connections, then re-route that group.
 
-    rk droute <session|board> --repair [--radius 4] [--nets ...]
+    badpcb droute <session|board> --repair [--radius 4] [--nets ...]
 
 Why: scoped passes on a routed board either leave the blockers alone (KRT only rips what it may and the log shows the same
 blockers again) or `--strip` throws away the whole bundle (and re-creates the same congestion elsewhere). `plan()` takes the
@@ -79,11 +79,11 @@ def strategy(history, cur_names, fan_ref=None, session="S"):
     fan = (" --fanout %s" % fan_ref) if fan_ref else ""
     nets = " ".join(union[:8])
     if "strip" in modes:
-        return ("the group %s kept flipping even after --strip --fanout: stop routing, change the board: `rk suggest %s mcu` / `rk plan %s` "
+        return ("the group %s kept flipping even after --strip --fanout: stop routing, change the board: `badpcb suggest %s mcu` / `badpcb plan %s` "
                 "(placement), swap the pins of the group, or `unlock` the lanes that wall it in" % (nets, session, session))
     if "repair" in modes:
-        return "next: `rk droute %s --strip%s --nets %s` (rip the whole group and re-escape it together)" % (session, fan, nets)
-    return "next: `rk droute %s --repair --radius 4%s --nets %s` (rip only the copper around the open ends, route the group again)" % (session, fan, nets)
+        return "next: `badpcb droute %s --strip%s --nets %s` (rip the whole group and re-escape it together)" % (session, fan, nets)
+    return "next: `badpcb droute %s --repair --radius 4%s --nets %s` (rip only the copper around the open ends, route the group again)" % (session, fan, nets)
 
 
 def escape_advice(target, nets, fan_ref=None):
@@ -105,8 +105,8 @@ def escape_advice(target, nets, fan_ref=None):
         if not hit:
             continue
         part = h.get("part")
-        out.append("audit ESCAPE %s.%s: %d signal stub(s) of %s are blocked by %s (fan %d%% used). Move those first: `rk plan %s %s --minimal` "
-                   "(or `rk eval %s 'move ...'` by hand), `rk act`, then `rk droute %s --strip --fanout %s --nets %s`" % (
+        out.append("audit ESCAPE %s.%s: %d signal stub(s) of %s are blocked by %s (fan %d%% used). Move those first: `badpcb plan %s %s --minimal` "
+                   "(or `badpcb eval %s 'move ...'` by hand), `badpcb act`, then `badpcb droute %s --strip --fanout %s --nets %s`" % (
                        part, h.get("side"), f.ev.get("signal_blocked", 0), " ".join(hit[:6]), " ".join(h.get("intruders", [])[:6]),
                        f.ev.get("used_pct", 0), target, part, target, target, part, " ".join(sorted(nets)[:8])))
     return out

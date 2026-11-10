@@ -1,16 +1,16 @@
-"""Detailed routing through KiCadRoutingTools (KRT), translated into rk's vocabulary.
+"""Detailed routing through KiCadRoutingTools (KRT), translated into badpcb's vocabulary.
 
-    python3 -m rk droute <session|board.kicad_pcb> [--nets N ...] [--component R ...] [--region R8|x0,y0,x1,y1]
+    python3 -m badpcb droute <session|board.kicad_pcb> [--nets N ...] [--component R ...] [--region R8|x0,y0,x1,y1]
                          [--preview] [--time S] [--out board] [--fresh] [--measure] [--extra "raw KRT route.py args"]
 
-* a session is first written to a board (rk apply, cached in <rk home>/routes/<session>/applied.kicad_pcb);
-  every pass then continues from <rk home>/routes/<session>/current.kicad_pcb, so small scoped passes chain naturally;
-* a plain board is routed from itself, result written to --out (default <rk home>/routes/<name>/passN.kicad_pcb);
+* a session is first written to a board (badpcb apply, cached in <badpcb home>/routes/<session>/applied.kicad_pcb);
+  every pass then continues from <badpcb home>/routes/<session>/current.kicad_pcb, so small scoped passes chain naturally;
+* a plain board is routed from itself, result written to --out (default <badpcb home>/routes/<name>/passN.kicad_pcb);
 * the scope (nets / component / region) is handed to KRT's route.py (--nets / --component), signal layers only;
 * KRT's log is parsed for failed nets and the nets that blocked them, the written board is re-extracted and
-  measured with rk (unrouted conns, vias, length) and kicad-cli DRC; every still-unrouted connection of the scope
+  measured with badpcb (unrouted conns, vias, length) and kicad-cli DRC; every still-unrouted connection of the scope
   is reported with region/cut handles (topo.py) and the blocking nets.
-KRT runs with its own python ($KRT_PY, tool dir $KRT_DIR, see scripts/krt_env.sh); rk itself stays pure python3.
+KRT runs with its own python ($KRT_PY, tool dir $KRT_DIR, see scripts/krt_env.sh); badpcb itself stays pure python3.
 """
 import fnmatch
 import json
@@ -44,7 +44,7 @@ def available():
 
 # --------------------------------------------------------------------------- measuring
 def measure(board_path, with_drc=True, pro=None):
-    """rk + kicad-cli view of a board file (the yardstick used for baseline, steered and per-pass numbers)."""
+    """badpcb + kicad-cli view of a board file (the yardstick used for baseline, steered and per-pass numbers)."""
     from . import cli
     b = cli.load_board(board_path)
     c = cli.Ctx(b)
@@ -141,7 +141,7 @@ def run_krt(src, dst, nets, comps, rules, time_cap, preview, extra, json_out, lo
     with open(log_path, "w") as lf:
         p = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, cwd=krt_dir(), start_new_session=True)
         timed_out = False
-        every = float(os.environ.get("RK_PROGRESS_S", "30"))
+        every = float(os.environ.get("BADPCB_PROGRESS_S", "30"))
         while True:
             left = time_cap - (time.time() - t0)
             try:
@@ -220,7 +220,7 @@ def parse_log(text):
     return out
 
 
-# --------------------------------------------------------------------------- reporting in rk terms
+# --------------------------------------------------------------------------- reporting in badpcb terms
 def _lock_note(board, net):
     """'LOCKED lane x16' if the net has locked copper (KRT cannot rip it), '' otherwise."""
     from collections import Counter
@@ -263,7 +263,7 @@ def explain_open(ctx, scope_nets, parsed, limit=14):
         L.append("  PROTECTED (net owns locked copper, so KRT never rips it nor re-routes it around other nets): %s -> `unlock <net>` / `unlock lanes`" %
                  " ".join("%s %s" % (n, _lock_note(b, n)) for n in prot[:10]))
     if locked_seen:
-        L.append("  LOCKED blockers named by KRT: %s -> consider `unlock <net>` (or `unlock lanes`) in the session, then `rk apply`/droute again" %
+        L.append("  LOCKED blockers named by KRT: %s -> consider `unlock <net>` (or `unlock lanes`) in the session, then `badpcb apply`/droute again" %
                  " ".join("%s %s" % (n, _lock_note(b, n)) for n in sorted(locked_seen, key=lambda n: -locked_seen[n])[:8]))
     if len(conns) > limit:
         L.append("  ... %d more open connections in scope" % (len(conns) - limit))
@@ -355,7 +355,7 @@ def main_args(a):
             idf = os.path.join(pd, "pass%d.repair.ids.json" % k)
             json.dump(rpl["ids"], open(idf, "w"))
             rsrc = os.path.join(pd, "pass%d.repair.kicad_pcb" % k)
-            config.kipy_run(["-m", "rk.strip_nets", src, rsrc, "--ids", idf], cwd=config.current().root)
+            config.kipy_run(["-m", "badpcb.strip_nets", src, rsrc, "--ids", idf], cwd=config.current().root)
             if os.path.exists(rsrc):
                 AP.copy_rules(rsrc, getattr(a, "rules_pro", None))
                 src = rsrc
@@ -380,7 +380,7 @@ def main_args(a):
         plane = set(board.plane_nets())
         ssrc = os.path.join(pd, "pass%d.strip.kicad_pcb" % k)
         P = {"tracks_del": [t for t in board.tracks if t.net in nets and t.net not in plane], "vias_del": [v for v in board.vias if v.net in nets and v.net not in plane]}
-        r = config.kipy_run(["-m", "rk.strip_nets", src, ssrc] + [n for n in nets if n not in plane], cwd=config.current().root)
+        r = config.kipy_run(["-m", "badpcb.strip_nets", src, ssrc] + [n for n in nets if n not in plane], cwd=config.current().root)
         print("  strip: removed copper of %d scope nets (%d tracks, %d vias) so they escape together" % (len(nets), len(P["tracks_del"]), len(P["vias_del"])))
         if os.path.exists(ssrc):
             AP.copy_rules(ssrc, getattr(a, "rules_pro", None))
@@ -425,7 +425,7 @@ def main_args(a):
                 if len(pts) == 1 else min((feas.grid_for_box(ctx, eff, (p[0], p[1], p[0], p[1])) for p in pts), key=lambda t: t[0])
         else:
             grid, gwhy = 0.25, "no open ends"
-    print("  grid %.3g mm (%s; rk feasibility; override with --grid)" % (grid, gwhy))
+    print("  grid %.3g mm (%s; badpcb feasibility; override with --grid)" % (grid, gwhy))
     rc, wall, timed_out, cmd = run_krt(src, dst, nets, a.component, rules, a.time, a.preview, a.extra, jo, lg, grid)
     text = open(lg, errors="replace").read()
     parsed = parse_log(text)

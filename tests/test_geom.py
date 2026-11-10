@@ -1,6 +1,6 @@
 import unittest
 
-from rk import geom
+from badpcb import geom
 
 
 class GeomTest(unittest.TestCase):

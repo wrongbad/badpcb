@@ -1,4 +1,4 @@
-"""Sessions + CLI end to end on a synthetic board written as a model.json (no KiCad): state lives under $RK_HOME, not the package."""
+"""Sessions + CLI end to end on a synthetic board written as a model.json (no KiCad): state lives under $BADPCB_HOME, not the package."""
 import contextlib
 import io
 import json
@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import unittest
 
-from rk import apply as AP, cli, config, state
+from badpcb import apply as AP, cli, config, state
 from tests import synth
 
 
@@ -27,7 +27,7 @@ def write_model(path):
              synth.part("R2", [synth.pad("1", (30, 10), "N1"), synth.pad("2", (31, 10), "N2")], pos=(30.5, 10), bbox=[29, 9, 32, 11]),
              synth.part("R3", [synth.pad("1", (20, 20), "N3"), synth.pad("2", (21, 20), "N3")], pos=(20.5, 20), bbox=[19, 19, 22, 21])]
     b = synth.board(parts, size=(60, 40))
-    from rk import model
+    from badpcb import model
     import dataclasses
     d = {"source": "synthetic", "bbox": list(b.bbox), "edge": [], "layers": b.layers, "rules": dataclasses.asdict(b.rules), "nets": b.nets,
          "parts": [{"ref": p.ref, "value": p.value, "fpid": p.fpid, "pos": list(p.pos), "rot": p.rot, "side": p.side, "locked": p.locked,
@@ -43,31 +43,31 @@ class TestSessionsAndCli(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.proj = os.path.join(self.tmp, "proj")
         os.makedirs(self.proj)
-        json.dump({"mcu": ""}, open(os.path.join(self.proj, "rk.json"), "w"))
+        json.dump({"mcu": ""}, open(os.path.join(self.proj, "badpcb.json"), "w"))
         self.model = os.path.join(self.proj, "toy.model.json")
         write_model(self.model)
-        self._home = os.environ.get("RK_HOME")
-        os.environ.pop("RK_HOME", None)
+        self._home = os.environ.get("BADPCB_HOME")
+        os.environ.pop("BADPCB_HOME", None)
         self._sd = state.SESSION_DIR
         state.SESSION_DIR = None
-        self._proj_env = os.environ.get("RK_PROJECT")
-        os.environ["RK_PROJECT"] = self.proj
+        self._proj_env = os.environ.get("BADPCB_PROJECT")
+        os.environ["BADPCB_PROJECT"] = self.proj
         config.load(self.proj)
 
     def tearDown(self):
-        os.environ.pop("RK_PROJECT", None)
+        os.environ.pop("BADPCB_PROJECT", None)
         if self._proj_env:
-            os.environ["RK_PROJECT"] = self._proj_env
+            os.environ["BADPCB_PROJECT"] = self._proj_env
         state.SESSION_DIR = self._sd
         if self._home is not None:
-            os.environ["RK_HOME"] = self._home
+            os.environ["BADPCB_HOME"] = self._home
         config.use({})
         shutil.rmtree(self.tmp)
 
     def test_session_files_live_in_project_dot_rk(self):
         code, out, err = run("session", "new", "s1", self.model)
         self.assertEqual(code, 0, err)
-        sf = os.path.join(self.proj, ".rk", "sessions", "s1.json")
+        sf = os.path.join(self.proj, ".badpcb", "sessions", "s1.json")
         self.assertTrue(os.path.exists(sf), out)
         d = json.load(open(sf))
         self.assertEqual(d["board"], "toy.model.json")               # stored relative to the project: portable
@@ -89,12 +89,12 @@ class TestSessionsAndCli(unittest.TestCase):
         self.assertEqual({f for f in os.listdir(pkg) if not f.startswith("__pycache__")}, {f for f in before if not f.startswith("__pycache__")})
 
     def test_rk_home_redirects_sessions(self):
-        os.environ["RK_HOME"] = os.path.join(self.tmp, "home")
+        os.environ["BADPCB_HOME"] = os.path.join(self.tmp, "home")
         try:
             run("session", "new", "s3", self.model)
             self.assertTrue(os.path.exists(os.path.join(self.tmp, "home", "sessions", "s3.json")))
         finally:
-            os.environ.pop("RK_HOME")
+            os.environ.pop("BADPCB_HOME")
 
     def test_report_runs_without_mcu_or_swaps(self):
         code, out, err = run("report", self.model)
@@ -106,8 +106,8 @@ class TestSessionsAndCli(unittest.TestCase):
     def test_project_command(self):
         code, out, _ = run("project")
         self.assertEqual(code, 0)
-        self.assertIn("rk home", out)
-        self.assertIn(os.path.join(self.proj, ".rk"), out)
+        self.assertIn("state dir", out)
+        self.assertIn(os.path.join(self.proj, ".badpcb"), out)
 
     def test_keys_action_needs_a_configured_group(self):
         run("session", "new", "s4", self.model)

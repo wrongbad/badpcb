@@ -1,6 +1,6 @@
 import unittest
 
-from rk import ratsnest, swaps, topo
+from badpcb import ratsnest, swaps, topo
 from tests.synth import board, pad, part, singles, via
 
 

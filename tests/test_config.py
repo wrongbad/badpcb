@@ -5,7 +5,7 @@ import shutil
 import tempfile
 import unittest
 
-from rk import config
+from badpcb import config
 from tests import synth
 
 
@@ -17,7 +17,7 @@ def qfn_part(ref, n=20, pitch=0.4):
 class TestProject(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self._env = {k: os.environ.get(k) for k in ("RK_PROJECT", "RK_HOME", "KRT_DIR", "KRT_PY", "KIPY", "KICAD_CLI")}
+        self._env = {k: os.environ.get(k) for k in ("BADPCB_PROJECT", "BADPCB_HOME", "KRT_DIR", "KRT_PY", "KIPY", "KICAD_CLI")}
         for k in self._env:
             os.environ.pop(k, None)
         self._cwd = os.getcwd()
@@ -39,14 +39,14 @@ class TestProject(unittest.TestCase):
         self.assertEqual(P.plane_hints(), [])
         self.assertIsNone(P.rules_pro)
         self.assertEqual(P.rules_pro_for("/x/b.kicad_pcb"), "/x/b.kicad_pro")
-        self.assertEqual(P.home, os.path.join(self.tmp, ".rk"))
+        self.assertEqual(P.home, os.path.join(self.tmp, ".badpcb"))
 
     def test_discovery_walks_up_and_resolves_relative_paths(self):
         sub = os.path.join(self.tmp, "a", "b")
         os.makedirs(sub)
         json.dump({"board": "x.kicad_pcb", "rules": {"project": "x.kicad_pro"}, "mcu": "U7",
                    "swaps": {"mcu": "U7", "pin_names": {"1": "A"}, "groups": []},
-                   "locks": {"classes": {"lane": "lanes.json", "mimic": "m.json:copied"}}}, open(os.path.join(self.tmp, "rk.json"), "w"))
+                   "locks": {"classes": {"lane": "lanes.json", "mimic": "m.json:copied"}}}, open(os.path.join(self.tmp, "badpcb.json"), "w"))
         os.chdir(sub)
         P = config.load()
         self.assertEqual(os.path.realpath(P.root), os.path.realpath(self.tmp))
@@ -60,7 +60,7 @@ class TestProject(unittest.TestCase):
 
     def test_rk_home_env_overrides_state_dir(self):
         P = config.use({}, root=self.tmp)
-        os.environ["RK_HOME"] = os.path.join(self.tmp, "elsewhere")
+        os.environ["BADPCB_HOME"] = os.path.join(self.tmp, "elsewhere")
         self.assertEqual(P.sessions_dir, os.path.join(self.tmp, "elsewhere", "sessions"))
         self.assertEqual(P.routes_dir, os.path.join(self.tmp, "elsewhere", "routes"))
         self.assertEqual(P.cache_dir, os.path.join(self.tmp, "elsewhere", "cache"))
@@ -83,8 +83,8 @@ class TestProject(unittest.TestCase):
 
     def test_short_paths_only_inside_a_project_file(self):
         P = config.use({}, root=self.tmp)
-        self.assertEqual(P.short(os.path.join(self.tmp, "b.kicad_pcb")), os.path.join(self.tmp, "b.kicad_pcb"))   # no rk.json: stay absolute
-        P2 = config.Project(os.path.join(self.tmp, "rk.json"), {})
+        self.assertEqual(P.short(os.path.join(self.tmp, "b.kicad_pcb")), os.path.join(self.tmp, "b.kicad_pcb"))   # no badpcb.json: stay absolute
+        P2 = config.Project(os.path.join(self.tmp, "badpcb.json"), {})
         self.assertEqual(P2.short(os.path.join(self.tmp, "sub", "b.kicad_pcb")), os.path.join("sub", "b.kicad_pcb"))
         self.assertEqual(P2.short("/elsewhere/b.kicad_pcb"), "/elsewhere/b.kicad_pcb")
 

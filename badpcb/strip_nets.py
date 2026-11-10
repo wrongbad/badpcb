@@ -1,9 +1,9 @@
-"""$KIPY -m rk.strip_nets src.kicad_pcb dst.kicad_pcb NET [NET ...]: delete all tracks and vias of the given nets (used by droute --strip).
-$KIPY -m rk.strip_nets src.kicad_pcb dst.kicad_pcb --ids ids.json: delete the tracks/vias with these uuids (droute --repair)."""
+"""$KIPY -m badpcb.strip_nets src.kicad_pcb dst.kicad_pcb NET [NET ...]: delete all tracks and vias of the given nets (used by droute --strip).
+$KIPY -m badpcb.strip_nets src.kicad_pcb dst.kicad_pcb --ids ids.json: delete the tracks/vias with these uuids (droute --repair)."""
 import json
 import sys
 
-from rk import kipy_exit
+from badpcb import kipy_exit
 
 
 def main(src, dst, nets, ids=None):

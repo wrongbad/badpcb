@@ -1,5 +1,5 @@
 """Tiny synthetic boards as model dicts (what extract.py would write), for unit tests."""
-from rk import model
+from badpcb import model
 
 
 def pad(num, pos, net, layers=("F.Cu",), size=(0.5, 0.5), drill=0.0):

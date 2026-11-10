@@ -1,11 +1,11 @@
-"""rk audit: placement linter. Catches "dumb placement" before minutes-long routing passes.
+"""badpcb audit: placement linter. Catches "dumb placement" before minutes-long routing passes.
 
-    python3 -m rk audit <board.kicad_pcb | session> [--json] [--full] [--roles] [--groute] [--only ESCAPE,PLANE,..]
-    rk suggest <session> audit            # the audit's best fix per finding as an eval table: `rk act S @N`
+    python3 -m badpcb audit <board.kicad_pcb | session> [--json] [--full] [--roles] [--groute] [--only ESCAPE,PLANE,..]
+    badpcb suggest <session> audit            # the audit's best fix per finding as an eval table: `badpcb act S @N`
 
 Detectors (priority order): ESCAPE PLANE BOWTIE ORIENT TENSION ROLES BUSORDER COURTYARD DENSITY.
-Every finding has a severity, the named handles (parts, nets, regions), evidence numbers, fixes written as rk compact
-actions (pasteable into `rk act` / `rk eval`) with the fix's predicted delta (evaluate.py, read-only: applied and undone)
+Every finding has a severity, the named handles (parts, nets, regions), evidence numbers, fixes written as badpcb compact
+actions (pasteable into `badpcb act` / `badpcb eval`) with the fix's predicted delta (evaluate.py, read-only: applied and undone)
 and its legality (actions.check -> legal.py).  A finding with fixes that are all illegal is reported without a fix.
 
 Design rules to stay quiet: ORIENT / BOWTIE / TENSION only report when a legal fix improves the metric; parts whose
@@ -760,7 +760,7 @@ def detect_plane(ac):
             len(boxed), PLANE_VIA_RADIUS, " ".join(pd.id for pd in boxed[:8])),
             handles={"pads": [pd.id for pd in boxed], "parts": parts}, ev={"n_pads": len(boxed)},
             where=boxed[0].pos, mag=0.3)
-        f.advice.append("nudge the part(s) off foreign copper or `unlock`/rip the blocking track, then `rk suggest S planes`")
+        f.advice.append("nudge the part(s) off foreign copper or `unlock`/rip the blocking track, then `badpcb suggest S planes`")
         out.append(f)
     return out
 
@@ -1103,7 +1103,7 @@ def detect_tension(ac):
         pad_num = _best_pad_toward(p, m)
         for s in ac.legal_spots(ref, m, pad_num, 0.0, 6.0, keep=2):
             f.fixes.append(Fix([mv_spot(p, s)], "legal spot %.1f mm from the median" % s[0], "spot"))
-        f.advice.append("`rk spots S %s %.1f %.1f` lists more" % (ref, m[0], m[1]))
+        f.advice.append("`badpcb spots S %s %.1f %.1f` lists more" % (ref, m[0], m[1]))
         out.append(f)
     return out
 
@@ -1535,7 +1535,7 @@ def _eval_fixes(ac, f, budget):
         f.fixes.sort(key=lambda x: (not x.ok, not _improves(f, x), x.res.dscore if x.res else 0.0))
 
 
-GSCORE = 0.0          # seconds of groute re-ranking (rk suggest S audit --gscore); 0 = off
+GSCORE = 0.0          # seconds of groute re-ranking (badpcb suggest S audit --gscore); 0 = off
 
 
 def run(st, only=None, rules_pro=None, name=None, budget=MAX_EVALS, gscore=None):
@@ -1605,7 +1605,7 @@ def _fmt_fix(f, fx, width=170):
 def text(rep, full=False, limit_lines=60):
     ac = rep.ac
     c = rep.counts()
-    L = ["rk audit %s: %d finding(s) [%d ERR %d WARN %d NOTE], score %.0f  (%d what-ifs, %.1fs)%s" % (
+    L = ["badpcb audit %s: %d finding(s) [%d ERR %d WARN %d NOTE], score %.0f  (%d what-ifs, %.1fs)%s" % (
         rep.name, len(rep.findings), c["ERR"], c["WARN"], c["NOTE"], rep.score, ac.n_eval, rep.wall,
         "  [%d open conns, %d locked tracks]" % (ac.base["unrouted"], sum(t.locked for t in ac.b.tracks)))]
     body = []
@@ -1707,9 +1707,9 @@ def _key(f):
 
 
 def suggest(st, n=10, max_eval=40, budget_s=60.0):
-    """rk suggest S audit: the best fix of each finding, in audit order, as evaluate Results.
+    """badpcb suggest S audit: the best fix of each finding, in audit order, as evaluate Results.
     Rows are CUMULATIVE: row k is evaluated (legality and delta) on the state after rows 1..k-1, so applying
-    `rk act S @1`, `@2`, ... in order works; a fix that became illegal falls back to the finding's next candidate."""
+    `badpcb act S @1`, `@2`, ... in order works; a fix that became illegal falls back to the finding's next candidate."""
     rep = run(st, name=st.name)
     ac = rep.ac
     notes, res = [], []
@@ -1808,5 +1808,5 @@ def main_args(a):
     print("\n".join(text(rep, a.full)))
     if a.groute:
         print("\n".join(run_groute(rep)))
-    print("(rk audit %.1fs)" % (time.time() - t0), file=sys.stderr)
+    print("(badpcb audit %.1fs)" % (time.time() - t0), file=sys.stderr)
     return 0

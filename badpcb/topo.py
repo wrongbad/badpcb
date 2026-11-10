@@ -85,7 +85,7 @@ def _major_boxes(board, min_area=25.0):
 
 class Topo:
     def __init__(self, board, rn, cell=21.0, ring_margin=2.0, ring_min_pads=20, light=False):
-        """light=True builds only the skeleton (regions, cuts, rings, capacities), no crossings (see rk.engine)."""
+        """light=True builds only the skeleton (regions, cuts, rings, capacities), no crossings (see badpcb.engine)."""
         self.board, self.rn = board, rn
         self.conns = rn.conns
         x0, y0, x1, y1 = board.bbox

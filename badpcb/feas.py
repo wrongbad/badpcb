@@ -1,7 +1,7 @@
 """Feasibility check for fine-pitch parts: can the effective design rules escape them at all?
 
 Effective rules = Default netclass + board minimums in the .kicad_pro + the simple custom rules in the sibling
-.kicad_dru (exactly the forms rules.py writes: `# rk-area NAME part=REF margin=M bbox=...` comments plus
+.kicad_dru (exactly the forms rules.py writes: `# badpcb-area NAME part=REF margin=M bbox=...` comments plus
 `(rule .. (condition "A.intersectsArea('NAME') ..") (constraint clearance|track_width (min V)))`).
 
 For every part with a pad pitch < PITCH_LIMIT (per side of the package) it computes
@@ -85,7 +85,7 @@ def load_rules(pro, board=None):
     if dru and os.path.exists(dru):
         txt = open(dru).read()
         areas = {}
-        for m in re.finditer(r"#\s*rk-area (\S+) part=(\S+) margin=([0-9.]+) bbox=([-0-9.,]+)", txt):
+        for m in re.finditer(r"#\s*(?:rk|badpcb)-area (\S+) part=(\S+) margin=([0-9.]+) bbox=([-0-9.,]+)", txt):
             areas[m.group(1)] = Area(m.group(1), m.group(2), float(m.group(3)), tuple(float(x) for x in m.group(4).split(",")))
         for m in re.finditer(r'\(rule\s+"[^"]*"\s*\(condition\s+"([^"]*)"\)\s*\(constraint\s+(clearance|track_width)\s*\(min\s+([^)]*)\)\)', txt):
             cond, kind, val = m.group(1), m.group(2), _mm(m.group(3))

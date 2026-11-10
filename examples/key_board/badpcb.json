@@ -1,5 +1,5 @@
 {
- "_comment": "Example rk project config for the key_board case study: copy next to key_board_placed.kicad_pcb (or edit the paths). Relative paths are relative to this file.",
+ "_comment": "Example badpcb project config for the key_board case study: copy next to key_board_placed.kicad_pcb (or edit the paths). Relative paths are relative to this file.",
  "board": "key_board_placed.kicad_pcb",
  "rules": {
   "project": "key_board_placed.kicad_pro"

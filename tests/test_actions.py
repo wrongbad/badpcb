@@ -3,8 +3,8 @@ import copy
 import os
 import unittest
 
-from rk import actions as A
-from rk import model
+from badpcb import actions as A
+from badpcb import model
 from tests import synth
 
 PLACED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models", "key_board_placed.model.json")
@@ -156,7 +156,7 @@ class DragWithMove(unittest.TestCase):
         return synth.board(parts, tracks)
 
     def test_small_move_stretches_and_undo_restores(self):
-        from rk import actions as A
+        from badpcb import actions as A
         w = A.World(self.board())
         b = w.board
         a = A.parse("move R1 10.3 10.2")[0]
@@ -171,7 +171,7 @@ class DragWithMove(unittest.TestCase):
         self.assertEqual((tuple(b.tracks[0].a), tuple(b.tracks[0].b)), ((10, 10), (20, 10)))
 
     def test_large_move_leaves_track(self):
-        from rk import actions as A
+        from badpcb import actions as A
         w = A.World(self.board())
         a = A.parse("move R1 14 10.5")[0]
         errs, warns = A.check(w, a)

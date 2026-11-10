@@ -1,6 +1,6 @@
 """Dump a .kicad_pcb to model.json (run with $KIPY; the only module that needs pcbnew).
 
-    "$KIPY" -m rk.extract board.kicad_pcb [model.json]     (PYTHONPATH must contain the directory holding the rk package)
+    "$KIPY" -m badpcb.extract board.kicad_pcb [model.json]     (PYTHONPATH must contain the directory holding the badpcb package)
 
 All coordinates mm, KiCad convention (+Y down). Layers are names ("F.Cu", "In1.Cu", ...).
 """
@@ -124,7 +124,7 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    from rk import kipy_exit
+    from badpcb import kipy_exit
     try:
         main(sys.argv)
     except BaseException:

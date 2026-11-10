@@ -1,6 +1,6 @@
 """groute: PathFinder (McMurchie & Ebeling 1995) negotiated-congestion global router + explanations.
 
-    python3 -m rk.groute <board.kicad_pcb|model.json> [--cell 1.0] [--iters 30] [--time 30]
+    python3 -m badpcb.groute <board.kicad_pcb|model.json> [--cell 1.0] [--iters 30] [--time 30]
                          [--hints h.json] [--nets EN*,SENSE*] [--region R8|C12] [--json out.json]
     groute.main(argv) -> int          (same arguments; for wiring into cli.py)
     groute.run(board, rn, **opts) -> Result   (library entry; Result.text(), Result.to_json())
@@ -215,7 +215,7 @@ class GRouter:
         return os.path.join(config.current().cache_dir, "groute_%s.pkl" % self._fingerprint())
 
     def _cache_load(self):
-        if os.environ.get("RK_NO_CACHE"):
+        if os.environ.get("BADPCB_NO_CACHE"):
             return False
         try:
             import pickle
@@ -228,7 +228,7 @@ class GRouter:
             return False
 
     def _cache_save(self):
-        if os.environ.get("RK_NO_CACHE"):
+        if os.environ.get("BADPCB_NO_CACHE"):
             return
         try:
             import pickle
@@ -1839,7 +1839,7 @@ def run(board, rn=None, cell=1.0, iters=30, tlimit=30.0, hints=(), nets=None, re
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="rk groute", description="PathFinder global router with explanations")
+    ap = argparse.ArgumentParser(prog="badpcb groute", description="PathFinder global router with explanations")
     ap.add_argument("board")
     ap.add_argument("--cell", type=float, default=1.0)
     ap.add_argument("--iters", type=int, default=30)
