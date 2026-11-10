@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.rk/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+krt-venv/
+# board files and their backups / routed passes
+*.kicad_pcb
+*.kicad_pcb-bak
+*.kicad_prl
+*-backups/
+fp-info-cache
+sessions/
+routes/
+.cache/
+.DS_Store

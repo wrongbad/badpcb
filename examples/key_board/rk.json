@@ -1,0 +1,28 @@
+{
+ "_comment": "Example rk project config for the key_board case study: copy next to key_board_placed.kicad_pcb (or edit the paths). Relative paths are relative to this file.",
+ "board": "key_board_placed.kicad_pcb",
+ "rules": {
+  "project": "key_board_placed.kicad_pro"
+ },
+ "mcu": "U1",
+ "fine_pitch_parts": [
+  "U1"
+ ],
+ "swaps": "swaps.json",
+ "locks": {
+  "classes": {
+   "lane": "lanes.json",
+   "mimic": "mimic.json:copied"
+  },
+  "trim": {
+   "nets": "^(EN|SENSE)\\d+$",
+   "key_parts": "^U1\\d\\d$",
+   "start_part": "U1",
+   "band_depth": 5.0
+  }
+ },
+ "krt": {
+  "dir": "/path/to/KiCadRoutingTools",
+  "python": "/path/to/KiCadRoutingTools/.venv/bin/python"
+ }
+}
