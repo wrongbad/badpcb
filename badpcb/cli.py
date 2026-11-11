@@ -294,9 +294,14 @@ def sec_feasibility(c, full):
     return feas.sec_feasibility(c, full)
 
 
-SECTIONS = {"feasibility": sec_feasibility, "summary": sec_summary, "clusters": sec_clusters, "copper": sec_copper, "cuts": sec_cuts, "inversions": sec_inversions,
+def sec_lint(c, full):
+    from . import lint
+    return lint.section(c, full)
+
+
+SECTIONS = {"lint": sec_lint, "feasibility": sec_feasibility, "summary": sec_summary, "clusters": sec_clusters, "copper": sec_copper, "cuts": sec_cuts, "inversions": sec_inversions,
             "planes": sec_planes, "mcu": sec_mcu, "u1": sec_mcu, "map": sec_map, "matrix": sec_matrix, "regions": sec_regions, "conns": sec_conns}
-DEFAULT = ["feasibility", "summary", "clusters", "copper", "cuts", "inversions", "planes", "mcu", "map"]
+DEFAULT = ["feasibility", "summary", "clusters", "copper", "cuts", "inversions", "planes", "mcu", "map", "lint"]
 
 
 def as_json(c):
@@ -570,6 +575,12 @@ def main(argv=None):
     x = sub.add_parser("styles", help="resolved net style per net (badpcb.json net_styles, KiCad netclasses): badpcb styles BOARD [--json]")
     x.add_argument("board")
     x.add_argument("--json", action="store_true")
+    x = sub.add_parser("lint", help="route lint: per-net ugliness table (detour, vias, jogs, corners, direction, plane splits, pair skew, escape zones): badpcb lint BOARD [--nets GLOB ..] [--top N] [--all] [--json]")
+    x.add_argument("board")
+    x.add_argument("--nets", nargs="*", default=[])
+    x.add_argument("--top", type=int, default=15)
+    x.add_argument("--all", action="store_true")
+    x.add_argument("--json", action="store_true")
     x = sub.add_parser("floorplan", help="step-2 view: blocks, fill, block nets/crossings, connectors, what faces each fine-pitch IC side, long links: badpcb floorplan <board|session> [--json] [--depth 8]")
     x.add_argument("target", help=".kicad_pcb / model.json path or a session name")
     x.add_argument("--json", action="store_true")
@@ -661,6 +672,9 @@ def main(argv=None):
         if a.cmd == "styles":
             from . import styles as _st
             return _st.main_args(a)
+        if a.cmd == "lint":
+            from . import lint as _lt
+            return _lt.main_args(a)
         if a.cmd == "plan" or (a.cmd == "audit" and a.joint is not None):
             from . import joint as _jt
             return _jt.main_args(a.target, a.refs if a.cmd == "plan" else a.joint, a.edge, a.minimal)
