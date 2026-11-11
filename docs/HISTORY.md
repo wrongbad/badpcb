@@ -34,3 +34,10 @@ pull the ADC filter capacitor from 11.3 to 6.6 mm of its pin, strip and re-escap
 - Cycle detection matters: three passes of the same kind that move the failure around mean change the board, not the pass.
 - Time boxes (pass <= 10 min), kill the whole process group on timeout, flush progress when piped.
 - Every `$KIPY` entry point must exit through `kipy_exit.done()` (pcbnew segfaults at interpreter teardown).
+
+## key_board_v2: the start-right respin
+After an EE review blamed v1's struggle on three initial conditions (external QSPI flash far from U1, the reference layout not respected, J1 in U1's escape path),
+the board was redone through PLAYBOOK steps 0-6: RP2354B (14 parts, 7 nets fewer), the RP2350 minimal design as reference block, a floorplan that puts U1's
+front signals in the switch-row channel. Result: 0 DRC, 0 unconnected, no locked copper, block crossings 105 -> 40. See `examples/key_board_v2/`.
+Lessons: outer-layer netted zones must not turn a layer into a plane layer; detect cycles by cut handle, not net name; the gate needs a channel check
+(small support parts in an escape corridor were legal by every detector and cost three chains).

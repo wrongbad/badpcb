@@ -1,0 +1,163 @@
+{
+ "_comment": "key_board_v2: intents are soft (penalties only). Reference = Raspberry Pi RP2350 80-QFN minimal design (refdes identical, so no ref maps).",
+ "board": "key_board.kicad_pcb",
+ "rules": {
+  "project": "key_board.kicad_pro"
+ },
+ "mcu": "U1",
+ "fine_pitch_parts": [
+  "U1"
+ ],
+ "intent": {
+  "refs": {
+   "rp": {
+    "pcb": "../ref/rp2350_minimal/B/RP2350_80QFN_minimal.kicad_pcb",
+    "anchor": "U1"
+   }
+  },
+  "blocks": {
+   "mcu": {
+    "parts": [
+     "U1",
+     "decaps:U1"
+    ]
+   },
+   "vreg": {
+    "parts": [
+     "L1",
+     "C6",
+     "C7",
+     "C9",
+     "R3"
+    ],
+    "max_span_mm": 10,
+    "ref": "rp"
+   },
+   "dvdd": {
+    "parts": [
+     "C8",
+     "C10",
+     "C11"
+    ],
+    "ref": "rp"
+   },
+   "iovdd": {
+    "parts": [
+     "C12",
+     "C13",
+     "C14",
+     "C15",
+     "C16",
+     "C17",
+     "C18",
+     "C20",
+     "C21"
+    ],
+    "ref": "rp"
+   },
+   "xtal": {
+    "parts": [
+     "Y1",
+     "C3",
+     "C4",
+     "R2"
+    ],
+    "max_span_mm": 8,
+    "ref": "rp"
+   }
+  },
+  "near": [
+   [
+    "decaps:U1",
+    "U1",
+    4.5
+   ],
+   [
+    "bulk:U1",
+    "U1",
+    12,
+    0.3
+   ],
+   [
+    "L1,C6,C7,C9,R3",
+    "U1",
+    4,
+    2.0
+   ],
+   [
+    "C8,C10,C11",
+    "U1",
+    3.5,
+    2.0
+   ],
+   [
+    "Y1",
+    "U1",
+    7
+   ],
+   [
+    "C3,C4,R2",
+    "Y1",
+    3.0
+   ],
+   [
+    "C23",
+    "U1.59",
+    5.5
+   ]
+  ],
+  "apart": [
+   [
+    "J1",
+    "U1",
+    6
+   ]
+  ],
+  "edge": [
+   [
+    "J1",
+    "back",
+    2
+   ],
+   [
+    "J2",
+    "front",
+    2
+   ],
+   [
+    "J3",
+    "front",
+    2
+   ]
+  ],
+  "clear": [
+   {
+    "zone": "escape:U1",
+    "except": [
+     "decaps:U1",
+     "SW*",
+     "L1",
+     "C6",
+     "C7",
+     "C9",
+     "R3",
+     "R2",
+     "C10",
+     "C23"
+    ],
+    "weight": 3
+   }
+  ]
+ },
+ "krt": {
+  "dir": "../tools/KiCadRoutingTools",
+  "python": "../tools/krt-venv/bin/python"
+ },
+ "audit": {
+  "filter_cap_rc_mm": 12.0,
+  "decap_bypass_mm": 4.5,
+  "xtal_load_mm": 4.6,
+  "decap_bulk_mm": 12.0,
+  "pull_mm": 60.0
+ }
+}
