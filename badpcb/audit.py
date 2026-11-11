@@ -30,7 +30,7 @@ from . import config, feas, geom, legal, ratsnest, swaps
 from . import intent as IN
 from .state import fmt_delta, parse_specs
 
-DETS = ["ESCAPE", "PLANE", "BOWTIE", "ORIENT", "TENSION", "ROLES", "INTENT", "BUSORDER", "COURTYARD", "DENSITY"]
+DETS = ["ESCAPE", "CHANNEL", "PLANE", "BOWTIE", "ORIENT", "TENSION", "ROLES", "INTENT", "BUSORDER", "COURTYARD", "DENSITY"]
 SEV_W = {"ERR": 10.0, "WARN": 4.0, "NOTE": 1.0}
 SEV_ORD = {"ERR": 0, "WARN": 1, "NOTE": 2}
 COURTYARD_BIAS = 0.09         # extractor courtyard boxes are ~0.045 mm larger per side than KiCad's polygons
@@ -61,6 +61,10 @@ DEFAULTS = {
     "zone_depth_pitch": 0.3,
     "zone_widen_mm": 1.0,        # fan-zone widening beyond the outermost pads, per side
     "intent_err": 8.0,           # INTENT: an entry whose weighted penalty is at least this is an ERR (below: WARN)
+    "channel_depth_mm": 10.0,    # CHANNEL: corridor length beyond the pad row of a fine-pitch side
+    "channel_widen_mm": 6.0,     # CHANNEL: how far past the outermost pads of a side the corridor may reach sideways (holes/keepouts/edge cut it earlier)
+    "channel_min_hole_mm": 1.0,  # CHANNEL: drills (NPTH holes, through pads of other parts) at least this wide bound the corridor
+    "channel_err_frac": 0.5,     # CHANNEL: ERR when support parts occupy this share of the corridor width (else WARN / NOTE)
 }
 
 
@@ -757,6 +761,196 @@ def _escape_swaps(ac, z, sc):
             for m, q in fn[:8]:
                 out.append(Fix([A.Action("swap_pins", group=gid, a=n, b=m).compact()], "move %s (pin %s, blocked) onto pin %s (clear)" % (n, p, q), "swap"))
     return out[:12]
+
+
+# ============================================================================= CHANNEL
+CHANNEL_REF_NET_RX = re.compile(r"(^|_)(LX|VREG)", re.I)
+
+
+def _reference_block(ac, ic):
+    """{ref: why} parts that belong to `ic`'s own reference block: declared decap/regulator-cap roles anchored on it, members of the intent
+    blocks that contain it (or are anchored on it), and the `except` list of its escape `clear` entries. These may sit in its corridor."""
+    b, w = ac.b, ac.w
+    ok = {}
+    for r, role in ac.roles().items():
+        if role.kind in ("decap", "reg_cap") and (role.anchor or "").split(".")[0] == ic:
+            ok[r] = "decap"
+    refnets = set()                                  # regulator loop / crystal nets: their passives are the reference design's, not extra support
+    for r, p in b.parts.items():
+        if r.startswith("Y") or "Crystal" in p.fpid or (r.startswith("L") and not r.startswith("LED") and len(p.pads) <= 3):
+            refnets |= {d.net for d in p.pads if d.net and not ac.is_gnd(d.net) and not ac.is_supply(d.net)}
+    for r, role in ac.roles().items():
+        if role.kind in ("inductor", "crystal", "xtal_load", "reg_cap"):
+            ok.setdefault(r, role.kind)
+    for r, p in b.parts.items():
+        if r not in ok and ac.is_passive(p) and any(d.net and (d.net in refnets or CHANNEL_REF_NET_RX.search(d.net)) for d in p.pads):
+            ok[r] = "regulator/crystal loop"
+    if w.intent:
+        C = IN.compiled(w)
+        for it in C.items:
+            if it["kind"] == "block" and (ic in it["A"] or it.get("anchor") == ic):
+                for r in it["A"]:
+                    ok.setdefault(r, "block " + it["e"]["name"])
+            elif it["kind"] == "clear" and it.get("ic") == ic:
+                for r in it["except"]:
+                    ok.setdefault(r, "clear exception")
+    return ok
+
+
+def _channel_obstacles(ac, ic):
+    """[(x0, y0, x1, y1, label)]: drilled holes (NPTH holes, through pads of other parts) and routing/copper keepouts: what bounds a corridor sideways."""
+    b, K = ac.b, params()
+    obs = []
+    for h in b.holes:
+        if h.drill >= K["channel_min_hole_mm"] - 1e-9:
+            r = h.drill / 2.0
+            obs.append((h.pos[0] - r, h.pos[1] - r, h.pos[0] + r, h.pos[1] + r, "%s hole (%.2f, %.2f)" % (h.ref, h.pos[0], h.pos[1])))
+    for p in b.parts.values():
+        if p.ref == ic:
+            continue
+        for d in p.pads:
+            if d.drill >= K["channel_min_hole_mm"] - 1e-9:
+                r = d.drill / 2.0
+                obs.append((d.pos[0] - r, d.pos[1] - r, d.pos[0] + r, d.pos[1] + r, "%s drill" % d.id))
+    for k in b.keepouts:
+        if k.keepout and (k.keepout.get("no_tracks") or k.keepout.get("no_copper")):
+            for zp in k.polys:
+                xs, ys = [q[0] for q in zp["outer"]], [q[1] for q in zp["outer"]]
+                obs.append((min(xs), min(ys), max(xs), max(ys), "keepout"))
+    return obs
+
+
+def channel_geometry(ac, z):
+    """Corridor of fine-pitch side `z`: from the pad row outward `channel_depth_mm` (shortened toward where the nets go), laterally between the
+    nearest holes / keepouts on each side of the pad row (at most `channel_widen_mm` past the outermost pads, never beyond the board edge).
+    -> dict(rect, width, depth, left, right, nets, signals) with left/right = the obstacle labels that bound it (or 'board edge'/'limit')."""
+    b, K = ac.b, params()
+    ax, na, sgn = z.ax, 1 - z.ax, z.sgn
+    ts = [d.pos[ax] for d in z.pads]
+    ta, tb = min(ts), max(ts)
+    c = (ta + tb) / 2.0
+    lo_b, hi_b = b.bbox[ax], b.bbox[ax + 2]
+    depth = K["channel_depth_mm"]
+    sig = [d for d in z.pads if ac.is_signal(d.net)]
+    nets = {d.net for d in sig}
+    proj = []                                     # how far along the normal the far ends of the side's nets lie
+    for net in nets:
+        for q in ac.b.pads_of_net(net):
+            if q.ref != z.ref and not ac.is_passive(b.parts[q.ref]):
+                proj.append((q.pos[na] - z.a_n) * sgn)
+    if proj:
+        proj.sort()
+        depth = max(3.0, min(depth, proj[len(proj) // 2]))
+    n0 = z.a_n
+    n1 = n0 + sgn * depth
+    edge_n = b.bbox[na + 2] if sgn > 0 else b.bbox[na]
+    if (n1 - edge_n) * sgn > 0:
+        n1 = edge_n
+    nlo, nhi = min(n0, n1), max(n0, n1)
+    L, R = max(lo_b, ta - K["channel_widen_mm"]), min(hi_b, tb + K["channel_widen_mm"])
+    left = "widen limit" if L > lo_b + 1e-9 else "board edge"
+    right = "widen limit" if R < hi_b - 1e-9 else "board edge"
+    for (x0, y0, x1, y1, lab) in _channel_obstacles(ac, z.ref):
+        o = (x0, y0, x1, y1)
+        if o[na + 2] < nlo or o[na] > nhi:
+            continue
+        o0, o1 = o[ax], o[ax + 2]
+        if o1 < L or o0 > R:
+            continue
+        if (o0 + o1) / 2.0 < c:
+            if o1 > L:
+                L, left = o1, lab
+        elif o0 < R:
+            R, right = o0, lab
+    R = max(R, L)
+    rect = (L, nlo, R, nhi) if ax == 0 else (nlo, L, nhi, R)
+    return {"rect": rect, "width": R - L, "depth": nhi - nlo, "left": left, "right": right, "nets": sorted(nets), "signals": len(sig),
+            "t0": L, "t1": R, "ax": ax}
+
+
+def detect_channel(ac):
+    """Escape corridors of fine-pitch parts: the hole/keepout-free channel a side's fan has to leave through. Support parts (resistors, caps,
+    other passives) that sit in it and are not part of the IC's reference block (its decaps, its declared blocks) take lanes the fan needs:
+    each was legal per ESCAPE (the fan zone is only 2-3 mm deep) and ROLES, yet a bundle of 16 signals cannot pass them."""
+    out = []
+    b, K = ac.b, params()
+    for z in ac.zones:
+        g = channel_geometry(ac, z)
+        if g["signals"] < 3 or g["width"] <= 0:
+            continue
+        ref_ok = _reference_block(ac, z.ref)
+        rect = g["rect"]
+        ax = g["ax"]
+        intr, other_side = {}, []
+        for r, p in b.parts.items():
+            if r == z.ref or not ac.is_passive(p) or r in ref_ok:
+                continue
+            bb = p.bbox
+            ov = (min(bb[2], rect[2]) - max(bb[0], rect[0])) * (min(bb[3], rect[3]) - max(bb[1], rect[1]))
+            if min(bb[2], rect[2]) <= max(bb[0], rect[0]) or min(bb[3], rect[3]) <= max(bb[1], rect[1]) or ov < 0.05:
+                continue
+            if ac.layer_of(r) != z.layer:
+                other_side.append(r)
+                continue
+            intr[r] = (ov, (max(bb[ax], rect[ax]), min(bb[ax + 2], rect[ax + 2])))
+        if not intr:
+            continue
+        spans = sorted(v[1] for v in intr.values())
+        occ, cur = 0.0, None
+        for a_, b_ in spans:
+            if cur is None or a_ > cur[1]:
+                if cur:
+                    occ += cur[1] - cur[0]
+                cur = [a_, b_]
+            else:
+                cur[1] = max(cur[1], b_)
+        occ += cur[1] - cur[0]
+        frac = occ / g["width"]
+        on_net = sorted((r for r in intr if any(d.net in g["nets"] for d in b.parts[r].pads)), key=_nat)
+        sev = "ERR" if frac >= K["channel_err_frac"] else "WARN" if (len(intr) >= 2 or on_net) else "NOTE"
+        pitch = ac.b.rules.track_width + ac.b.rules.clearance
+        lanes = int(g["width"] / pitch) if pitch > 0 else 0
+        parts = sorted(intr, key=lambda r: (-intr[r][0], _nat(r)))
+        mid = ((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2)
+        f = Finding("CHANNEL", sev, "%s escape channel %.1f mm wide x %.1f mm deep (%s .. %s): %d signal(s) leave through it (~%d lanes/layer); %d support part(s) outside its reference block sit in it, taking %.0f%% of the width: %s" % (
+            z.name, g["width"], g["depth"], g["left"], g["right"], g["signals"], lanes, len(intr), 100 * min(1.0, frac), " ".join(parts[:10]) + (" ..." if len(parts) > 10 else "")),
+            handles={"part": z.ref, "side": z.side, "region": ac.region(mid), "parts": sorted(intr, key=_nat), "nets": g["nets"], "intruders": sorted(intr, key=_nat)},
+            ev={"width_mm": round(g["width"], 1), "depth_mm": round(g["depth"], 1), "signals": g["signals"], "lanes_per_layer": lanes, "occupied_pct": round(100 * min(1.0, frac)),
+                "rect": [round(v, 2) for v in rect], "bounded_by": [g["left"], g["right"]], "on_fan_nets": on_net, "other_side": sorted(other_side, key=_nat),
+                "reference_block": sorted(ref_ok, key=_nat)},
+            where=mid, mag=min(2.0, 0.5 + frac + 0.05 * len(intr)))
+        pulls = [r for r in on_net if (ac.roles().get(r) and ac.roles()[r].kind in ("pullup", "pulldown"))]
+        rest = [r for r in on_net if r not in pulls]
+        if pulls:
+            f.advice.append("%s are pull-ups/pull-downs on the fan's own nets: they may sit anywhere on their net, e.g. next to the far end of the net, out of the corridor" % " ".join(pulls[:8]))
+        if rest:
+            f.advice.append("%s are series/filter parts on the fan's own nets: keep their role distance but out of the corridor (beside it, or at the far end of the net)" % " ".join(rest[:8]))
+        if other_side:
+            f.advice.append("%s are on the other board side (not counted as blocking, but their vias/stubs still need lanes)" % " ".join(sorted(other_side, key=_nat)[:8]))
+        f.advice.append("declare what belongs here (intent `blocks` / `clear.except`) or move the rest out; then re-run `badpcb floorplan` and a groute score for the corridor before routing (PLAYBOOK step 4)")
+        acts = []
+        with Trial(ac.w) as tr:
+            for r in [x for x in parts if ac.movable(x)][:8]:
+                p = b.parts[r]
+                role = ac.roles().get(r)
+
+                def ok(bb, pos, rot, rect=rect, role=role, p=p):
+                    if not (bb[2] <= rect[0] - 0.2 or bb[0] >= rect[2] + 0.2 or bb[3] <= rect[1] - 0.2 or bb[1] >= rect[3] + 0.2):
+                        return False
+                    if role and role.limit and role.anchor_pt is not None and geom.dist(pos, role.anchor_pt) > max(role.limit, role.dist or 0) * K["violation_slack"] + 1.0:
+                        return False
+                    return True
+                spot = ac.ring_spot(r, p.pos, ok, rmax=14.0)
+                if spot:
+                    a = A.Action("move", ref=r, x=spot[0], y=spot[1], **({"rot": spot[2]} if abs(A._norm(spot[2] - p.rot)) > 1e-6 else {}))
+                    if tr.apply(a):
+                        acts.append(a)
+        if acts:
+            f.fixes.append(Fix([a.compact() for a in acts], "move %d support part(s) out of the %s channel (role distances kept)" % (len(acts), z.name), "channel"))
+            if len(acts) > 1:
+                f.fixes.append(Fix([acts[0].compact()], "move %s out of the %s channel" % (acts[0].a["ref"], z.name), "channel1"))
+        out.append(f)
+    return out
 
 
 # ============================================================================= PLANE
@@ -1725,7 +1919,7 @@ def _nat(s):
     return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", s)]
 
 
-DETECTORS = {"ESCAPE": detect_escape, "PLANE": detect_plane, "BOWTIE": detect_bowtie, "ORIENT": detect_orient, "TENSION": detect_tension,
+DETECTORS = {"ESCAPE": detect_escape, "CHANNEL": detect_channel, "PLANE": detect_plane, "BOWTIE": detect_bowtie, "ORIENT": detect_orient, "TENSION": detect_tension,
              "ROLES": detect_roles, "INTENT": detect_intent, "BUSORDER": detect_busorder, "COURTYARD": detect_courtyard, "DENSITY": detect_density}
 
 

@@ -468,3 +468,90 @@ class GScore(unittest.TestCase):
         d = rep.findings[0].fixes[0].as_dict()
         self.assertTrue("groute" in d or not rep.findings[0].fixes[0].ok)
         self.assertIn("groute", audit._fmt_fix(rep.findings[0], [x for x in rep.findings[0].fixes if getattr(x, "g1", None)][0]))
+
+
+class Channel(unittest.TestCase):
+    """CHANNEL: support parts in the hole-bounded corridor a fine-pitch side leaves through, unless they belong to its reference block."""
+
+    def tearDown(self):
+        from badpcb import config
+        config.use({})
+
+    def u(self, n_sig=8):
+        """U9 at (50, 10), S side facing +Y: 8 signal pads at 0.4 pitch (x 48.6 .. 51.4) on the row y = 12; the N row is unused."""
+        pads = [P(str(i + 1), (48.6 + 0.4 * i, 12.0), "s%d" % i, size=(0.2, 0.8)) for i in range(n_sig)]
+        pads += [P(str(i + 20), (48.6 + 0.4 * i, 8.0), "", size=(0.2, 0.8)) for i in range(n_sig)]
+        pads += [P("40", (47.0, 10.0), "+3V3", size=(0.8, 0.2)), P("41", (53.0, 10.0), "+3V3", size=(0.8, 0.2))]
+        return part("U9", pads, (50, 10), half=(3.0, 2.8))
+
+    def far(self, n_sig=8):
+        """The far end of every signal: a connector 40 mm in front of the IC."""
+        return [part("J1", [P(str(i + 1), (40 + 2 * i, 52), "s%d" % i) for i in range(n_sig)], (47, 52), half=(10, 1.5))]
+
+    def board(self, extra, holes=((44.0, 17.0), (56.0, 17.0))):
+        parts = [self.u()] + self.far() + extra
+        b = synth.board(parts, size=(100, 60))
+        from badpcb import model
+        b.holes[:] = [model.Hole(h, 1.75, "SW%d" % i) for i, h in enumerate(holes)]
+        return state.State("t_audit", "synthetic", b, [], 21.0)
+
+    def pulldown(self, ref, x, y, net="s0"):
+        return part(ref, [P("1", (x, y - 0.5), net), P("2", (x, y + 0.5), "GND")], (x, y), half=(0.5, 0.9), value="100k")
+
+    def test_channel_is_bounded_by_the_holes_and_pulldowns_in_it_are_found(self):
+        st = self.board([self.pulldown("R20", 48.0, 16.0, "s0"), self.pulldown("R21", 50.0, 16.0, "s1"), self.pulldown("R22", 52.0, 16.0, "s2")])
+        f = dets(audit.run(st, ["CHANNEL"]), "CHANNEL")
+        self.assertEqual(len(f), 1)
+        f = f[0]
+        self.assertEqual(f.handles["part"], "U9")
+        self.assertEqual(f.handles["side"], "S")
+        self.assertEqual(f.handles["intruders"], ["R20", "R21", "R22"])
+        self.assertAlmostEqual(f.ev["width_mm"], 12.0 - 1.75, delta=0.1)             # hole edge to hole edge
+        self.assertTrue(all("hole" in x for x in f.ev["bounded_by"]))
+        self.assertGreaterEqual(f.ev["occupied_pct"], 25)
+        self.assertEqual(f.ev["on_fan_nets"], ["R20", "R21", "R22"])
+        self.assertIn(f.sev, ("WARN", "ERR"))
+        self.assertTrue(any("pull-ups/pull-downs" in a for a in f.advice))
+        self.assertTrue(f.fixes)                                                    # a legal move out of the corridor
+        rect = f.ev["rect"]
+        for a in f.best.acts if f.best else []:
+            x, y = float(a.split()[2]), float(a.split()[3])
+            self.assertFalse(rect[0] < x < rect[2] and rect[1] < y < rect[3])
+
+    def test_clear_channel_is_quiet(self):
+        self.assertEqual(dets(audit.run(self.board([]), ["CHANNEL"]), "CHANNEL"), [])
+
+    def test_part_outside_the_holes_is_not_in_the_channel(self):
+        st = self.board([self.pulldown("R20", 40.0, 16.0)])                         # beyond the hole at x=44
+        self.assertEqual(dets(audit.run(st, ["CHANNEL"]), "CHANNEL"), [])
+
+    def test_reference_block_decaps_are_allowed(self):
+        decap = part("C1", [P("1", (47.5, 14.0), "+3V3"), P("2", (47.5, 14.6), "GND")], (47.5, 14.3), half=(0.4, 0.7), value="100n")
+        st = self.board([decap, self.pulldown("R20", 50.0, 16.0)])
+        f = dets(audit.run(st, ["CHANNEL"]), "CHANNEL")
+        self.assertEqual(f[0].handles["intruders"], ["R20"])                         # the decap is U9's own role: not flagged
+        self.assertIn("C1", f[0].ev["reference_block"])
+
+    def test_declared_intent_block_and_clear_exception_exempt_parts(self):
+        from badpcb import config
+        config.use({"intent": {"blocks": {"mcu": {"parts": ["U9", "R20"]}}, "clear": [{"zone": "escape:U9", "except": ["R21"]}]}})
+        st = self.board([self.pulldown("R20", 48.0, 16.0), self.pulldown("R21", 50.0, 16.0, "s1"), self.pulldown("R22", 52.0, 16.0, "s2")])
+        f = dets(audit.run(st, ["CHANNEL"]), "CHANNEL")
+        self.assertEqual(f[0].handles["intruders"], ["R22"])
+
+    def test_other_side_parts_do_not_block_but_are_mentioned(self):
+        r = self.pulldown("R20", 50.0, 16.0)
+        r["side"] = "B"
+        st = self.board([r, self.pulldown("R21", 52.0, 16.0, "s2")])
+        f = dets(audit.run(st, ["CHANNEL"]), "CHANNEL")
+        self.assertEqual(f[0].handles["intruders"], ["R21"])
+        self.assertEqual(f[0].ev["other_side"], ["R20"])
+
+    def test_crowded_channel_is_an_error_and_json_is_serialisable(self):
+        import json
+        st = self.board([self.pulldown("R%d" % (20 + k), 46.5 + 1.0 * k, 16.0, "s%d" % k) for k in range(6)])
+        rep = audit.run(st, ["CHANNEL"])
+        f = dets(rep, "CHANNEL")[0]
+        self.assertEqual(f.sev, "ERR")
+        json.dumps(audit.as_json(rep), default=str)
+        self.assertIn("CHANNEL", "\n".join(audit.text(rep)))
