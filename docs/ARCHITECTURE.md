@@ -35,6 +35,8 @@ badpcb/
   actions.py      action types + apply-to-state + legality
   evaluate.py     what-if: score candidate actions without committing (Δ metrics)
   state.py        State = model + applied actions + routes; snapshot/branch/revert/diff
+  intent.py       design intent (soft penalties): selectors/roles, near/apart/edge/clear/block, reference drift; `penalty(world)` feeds engine metrics
+  floorplan.py    `badpcb floorplan`: blocks (declared + automatic), block nets/crossings, connectors, escape-facing, long links
   groute.py       PathFinder negotiated-congestion global router on a coarse multilayer grid;
                   history costs -> blockage explanations, thrash counts
   droute.py       detailed routing = scoped KiCadRoutingTools (KRT) passes + badpcb-vocabulary report (see Phase 4 notes)
@@ -97,6 +99,21 @@ and legal.py verdict (read-only). `badpcb suggest S audit` returns the best fix 
 - `badpcb droute S --repair [--radius 4]` (badpcb/repair.py): rips only the unlocked, non-plane copper within `radius` of both ends of every open connection (locked copper counted and named for `unlock`), adds the ripped nets to the KRT scope. Pass `mode` (plain/repair/strip) is recorded in passes.jsonl; the ping-pong warning ends with the next rung of the ladder (plain -> repair -> strip+fanout -> change placement/unlock).
 - `badpcb groute S|board [...]` (badpcb/gscore.py): the PathFinder global router on a session's current state with its hints (corridor/layer/priority/freeze; side/reserve/near listed as ignored). `badpcb audit S --gscore [SEC]` / `badpcb suggest S audit --gscore [SEC]` re-rank each finding's top-3 fixes by a short groute run on the finding's region (score = overflow + 5 no-path + 0.1 history; shown as `{groute R8: score a -> b}`). Coarse: at the 1 mm default it separates fixes only where the locked-lane/cut capacity is the limit (U1's fan is invisible below ~0.25 mm cells, ~40 s per run; BADPCB_GSCORE_CELL overrides).
 
+## Phase 8 notes (design intent and floorplan)
+- `intent` (badpcb.json, parsed in `config.py`: `parse_intent`, `intent_entries`, ids `near1`, `clear1`, `block:NAME`) lives in `World.intent` (+ `intent_ver`),
+  so it is part of the session like hints: actions `intent_add` / `intent_rm` / `intent_capture` (compact `intent add JSON`, `intent rm ID`, `intent capture BLOCK`)
+  are logged, replayed and have exact inverses. Everything is soft: weights only, no checks in `actions.check` (it only warns about selectors that match nothing).
+- Scoring: `intent.penalty(world)` is a pure function of the part poses (compiled selectors + roles cached per `intent_ver`; escape rectangles per IC pose), so the
+  engine's incremental metrics equal a fresh recompute (tests). `Engine.metrics()` adds `intent` (+ `intent_n`); `METRIC_KEYS`/`WEIGHTS` carry it with weight 1,
+  `fmt_metrics` prints `intent=` only when something is declared. `joint.py` adds `0.5 x intent.part_cost()` (entries involving that part, at the candidate courtyard) to a spot's cost.
+- Reference blocks: the anchor's pads (by pad number) are fitted rigidly (rotation + translation, mirror when the board sides differ) onto the reference's;
+  member offsets from the mapped reference positions give the RMS drift. References come from a `.kicad_pcb` (extracted and cached like any board) or a capture
+  (stored in the entry, so it survives in the session log).
+- Audit `INTENT` (audit.py `detect_intent`): one finding per violated entry; fixes come from a ring search for the nearest legal spot where the entry stops penalising
+  the part without making the part's other entries worse (`Ctx.ring_spot`); fix ranking uses `dscore` (which includes `intent`) and requires a negative intent delta.
+- `floorplan.py`: declared blocks, then connectors, regular arrays (>= 12 identical footprints, even spacing; co-located arrays merged), IC seeds, passives attached
+  by shared signal net / nearest supply pin, leftovers by net connectivity. Block-level ratsnest = MST per signal net over the net's pad centroids in each block.
+  Escape-facing reuses `audit.escape_zones(.., any_pitch=True)` and extends each zone to a `--depth` corridor.
 
 ## Project config and state (standalone badpcb)
 - `badpcb.json` (cwd or parent, `--project`, `$BADPCB_PROJECT`) holds board facts: rules project, mcu / fine-pitch parts, swap groups, lock classes + lane trim
