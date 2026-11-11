@@ -4,6 +4,12 @@ The board: 298x84 mm, 4 layers (In1 GND, In2 +3V3/+3V3A), 58 sensors on B.Cu, an
 Freerouting ran for hours and left many nets open. badpcb was built so an LLM agent could steer routing with text and named handles instead.
 Numbers below are that board's; the lessons are general.
 
+Board versions (in the author's tree under `synth/key_board/`, not part of this repo):
+- `pcb_v1`: the original scripted pipeline and the 8-hour Freerouting attempt.
+- `pcb_v2`: the RP2350B board badpcb was developed and steered on (`examples/pcb_v2`).
+- `pcb_v3`: pcb_v2 finished by hand-directed fixes (0 DRC, 0 unconnected).
+- `pcb_v4`: the RP2354B start-right respin (`examples/pcb_v4`).
+
 ## Phases
 1. **Foundation**: pcbnew only at the edges (extract/apply under `$KIPY`; since replaced by the pure-python `kicad_pcb.py` reader/writer, no KiCad python needed), pure-Python model, ratsnest MST per net, region/cut topology with
    named handles (R8, C12, K1), conflict matrix and clusters, ASCII map, swap-group legality, `report`.
@@ -35,9 +41,9 @@ pull the ADC filter capacitor from 11.3 to 6.6 mm of its pin, strip and re-escap
 - Time boxes (pass <= 10 min), kill the whole process group on timeout, flush progress when piped.
 - (Historical) pcbnew segfaults at interpreter teardown, so every `$KIPY` entry point had to exit through `os._exit`; no longer relevant.
 
-## key_board_v2: the start-right respin
-After an EE review blamed v1's struggle on three initial conditions (external QSPI flash far from U1, the reference layout not respected, J1 in U1's escape path),
+## pcb_v4: the start-right respin
+After an EE review blamed pcb_v2's struggle on three initial conditions (external QSPI flash far from U1, the reference layout not respected, J1 in U1's escape path),
 the board was redone through PLAYBOOK steps 0-6: RP2354B (14 parts, 7 nets fewer), the RP2350 minimal design as reference block, a floorplan that puts U1's
-front signals in the switch-row channel. Result: 0 DRC, 0 unconnected, no locked copper, block crossings 105 -> 40. See `examples/key_board_v2/`.
+front signals in the switch-row channel. Result: 0 DRC, 0 unconnected, no locked copper, block crossings 105 -> 40. See `examples/pcb_v4/`.
 Lessons: outer-layer netted zones must not turn a layer into a plane layer; detect cycles by cut handle, not net name; the gate needs a channel check
 (small support parts in an escape corridor were legal by every detector and cost three chains).

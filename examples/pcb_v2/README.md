@@ -1,4 +1,4 @@
-# Case study: key_board
+# Case study: pcb_v2
 
 Config for the 298x84 mm keyboard board the kernel was developed on (RP2350B at U1, 58 sensors, EN/ADC lines). See `../../docs/HISTORY.md`.
 
@@ -9,5 +9,5 @@ Files
 The config shows every board-specific knob: `mcu`, `fine_pitch_parts`, `rules.project`, `locks.classes` (`lanes.json`: scripted EN/SENSE trunk copper, `mimic.json:copied`: reference copper), `locks.trim` (which lane nets `trim-lanes` may cut, which refdes count as keys, where trunks start), `krt`.
 Not included, produced by the board's own scripts: `lanes.json`, `mimic.json`, `key_board_placed.kicad_pro/.kicad_dru`.
 
-In the author's tree this is `synth/key_board_smarter/` (`badpcb.json`, state in `.badpcb/`, board tests in `rk_board_tests/`):
-`cd key_board_smarter; source ../env.sh; export PYTHONPATH=../badpcb; python3 -m badpcb report key_board_placed.kicad_pcb`
+In the author's tree this is `synth/key_board/pcb_v2/` (`badpcb.json`, state in `.badpcb/`, board tests in `rk_board_tests/`):
+`cd key_board/pcb_v2; source ../../env.sh; export PYTHONPATH=../../badpcb; python3 -m badpcb report key_board_placed.kicad_pcb`

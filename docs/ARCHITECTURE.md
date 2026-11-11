@@ -5,7 +5,7 @@ topological decisions (assignments, rotations, corridors, layer plans). The kern
 does fast geometry and arithmetic, and **always explains why something is stuck**,
 in text and matrices that use named handles. No images are needed.
 
-Case study (see HISTORY.md, examples/key_board/): a 298×84 mm, 4-layer keyboard (GND and +3V3/+3V3A planes), 58 sensors,
+Case study (see HISTORY.md, examples/pcb_v2/): a 298×84 mm, 4-layer keyboard (GND and +3V3/+3V3A planes), 58 sensors,
 an RP2350B (QFN-80, 0.4 mm) at U1, 8 EN nets × 8 SENSE/ADC nets. Freerouting ran for hours and left many nets unrouted.
 Nothing in the package is specific to it: per-board facts live in `badpcb.json` (README, `badpcb/config.py`).
 
@@ -56,7 +56,7 @@ badpcb/
 crossings (ratsnest, same-layer-agnostic), cut overflow (sum and max), inversions,
 estimated vias, wirelength, unrouted count, DRC errors (only after detailed routing).
 
-## Swap freedoms of the case-study board (declared in its swaps json, examples/key_board/swaps.json)
+## Swap freedoms of the case-study board (declared in its swaps json, examples/pcb_v2/swaps.json)
 - ADC channel permutation: SENSE0..7 ↔ GPIO40..47 (any permutation; firmware remaps).
 - EN GPIO assignment: EN0..7 ↔ any free RP2350B GPIO (not just 32–39).
 - Key→(region, en) assignment: any bijection where each key gets a unique (region, en) pair.
@@ -68,7 +68,7 @@ estimated vias, wirelength, unrouted count, DRC errors (only after detailed rout
 2. actions + state + evaluate (what-if).
 3. groute (PathFinder) with explanations.
 4. droute + apply + DRC loop.
-5. Torture: a separate agent drives only the CLI to route key_board, and we log what it needed.
+5. Torture: a separate agent drives only the CLI to route the case-study board (pcb_v2), and we log what it needed.
 
 ## Phase 4 notes (apply + droute on KiCadRoutingTools)
 Decision: no own detailed router. KRT is located by $KRT_DIR / $KRT_PY (or badpcb.json `krt`), own venv; `source scripts/krt_env.sh`.
@@ -81,7 +81,7 @@ Decision: no own detailed router. KRT is located by $KRT_DIR / $KRT_PY (or badpc
   protects those nets, so locked lanes/stubs are hard obstacles for it.
 
 ## Phase 5 notes (rules, feasibility, locks, pad-level legality)
-- **Rules live in the project, not the board.** a board-side script (key_board: `rules.py`) writes `.kicad_pro` (Default netclass 0.15/0.2, via 0.5/0.25, minimums) and `.kicad_dru`
+- **Rules live in the project, not the board.** a board-side script (pcb_v2: `rules.py`) writes `.kicad_pro` (Default netclass 0.15/0.2, via 0.5/0.25, minimums) and `.kicad_dru`
   (clearance/track 0.10 inside the `U1_FINE` rule area = courtyard + 1 mm). `apply.copy_rules` puts both beside every board badpcb writes; DRC grades against them (`--rules-pro` overrides).
   
 - `feas.py` / `badpcb report --section feasibility` (first section): per fine-pitch (< 0.65 mm) part and side: pitch, pad width, gap, max track between pads,
@@ -137,7 +137,7 @@ and legal.py verdict (read-only). `badpcb suggest S audit` returns the best fix 
 - **CHANNEL** (`audit.detect_channel`): per fine-pitch side the corridor its fan leaves through = from the pad row outward `channel_depth_mm` (shortened toward where the nets go),
   laterally between the nearest drilled holes / through pads / keepouts on each side of the pad row (at most `channel_widen_mm` past the outermost pads). Support passives on the
   IC's board side inside it that are not in the IC's reference block (decap/regulator/crystal roles, members of intent blocks containing the IC, `clear` exceptions) are findings; severity from the share of the
-  corridor width they occupy. ESCAPE only looks 2-3 mm deep, ROLES only at distances, so on the v2 keyboard 8 RC parts in an 8.1 mm hole-to-hole channel passed both. Tunables: `audit.channel_*`.
+  corridor width they occupy. ESCAPE only looks 2-3 mm deep, ROLES only at distances, so on the pcb_v4 keyboard 8 RC parts in an 8.1 mm hole-to-hole channel passed both. Tunables: `audit.channel_*`.
 - **PLANE** judges a pad by its copper extent and the stub + via reach into the right zone (zone outlines; fills are never read), not by the pad centre.
 - **plane_layers** (`model.Board.plane_layer_info`): coverage of the board outline by netted zone outlines > `planes.min_coverage`; `plane_zones()` / `plane_nets()` only count zones on such layers.
 - **floorplan regulator check** (`_regulators`): loop caps only (declared `vreg`/regulator block, LX/VREG/FB nets, nearest cap on each output rail + any within `REG_CAP_MM`); other rail caps are listed as `rail decaps not counted`.

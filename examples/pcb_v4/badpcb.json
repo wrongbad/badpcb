@@ -1,5 +1,5 @@
 {
- "_comment": "key_board_v2: intents are soft (penalties only). Reference = Raspberry Pi RP2350 80-QFN minimal design (refdes identical, so no ref maps).",
+ "_comment": "pcb_v4: intents are soft (penalties only). Reference = Raspberry Pi RP2350 80-QFN minimal design (refdes identical, so no ref maps).",
  "board": "key_board.kicad_pcb",
  "rules": {
   "project": "key_board.kicad_pro"

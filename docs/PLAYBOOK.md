@@ -65,7 +65,7 @@ support jointly and now weighs intent too; `suggest S audit` ranks fixes with `i
 ## 4. Gate: audit + intent clean enough before routing
 Run `badpcb report S --section summary` (METRICS with `intent=`), `badpcb audit S` (check its header: board path, mtime, zone count, so you know it read the board you think), `badpcb floorplan S`.
 Also look at the **escape corridors**: `badpcb audit S --only CHANNEL` finds the hole/keepout-free channel each fine-pitch side has to leave through and lists the support parts (pull-downs, RC filters,
-anything that is not the IC's own reference block) sitting in it. ESCAPE only sees the 2-3 mm fan zone and ROLES only distances, so these were all "legal" and still cost three failed chains on the v2 keyboard.
+anything that is not the IC's own reference block) sitting in it. ESCAPE only sees the 2-3 mm fan zone and ROLES only distances, so these were all "legal" and still cost three failed chains on the pcb_v4 keyboard.
 Move them (pull-downs may sit anywhere on their net) or declare them (`blocks` / `clear.except`) and run `badpcb groute S --region <channel region> --time 20` as a cheap corridor score before routing.
 Go to routing when: no ERR finding in ESCAPE / CHANNEL / PLANE / ROLES / INTENT / COURTYARD, WARN INTENT findings are consciously accepted (relax or remove the intent
 instead of ignoring it), floorplan shows no foreign block in a fan zone, no LONG link. Breaking a reference on purpose is fine: say so

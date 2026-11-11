@@ -1,6 +1,6 @@
-# WORKFLOW_LOG: key_board_v2 (badpcb PLAYBOOK steps 0-6)
+# WORKFLOW_LOG: pcb_v4 (badpcb PLAYBOOK steps 0-6)
 
-Conventions: all numbers are from badpcb / kicad-cli runs in this folder. "v1" = key_board_smarter. Routing time is wall-clock of KRT passes only.
+Conventions: all numbers are from badpcb / kicad-cli runs in this folder. pcb_v2 is the earlier RP2350B routing-development board (same schematic as pcb_v1 and pcb_v3). Routing time is wall-clock of KRT passes only.
 
 ## Step 0: simplify the architecture (before any layout)
 Decided, applied in `key_board.py`:
@@ -19,7 +19,7 @@ C12..C18 C20 C21 = IOVDD, Y1 C3 C4 R2 = crystal), so the blocks in badpcb.json n
 with `ref`, near (decaps, regulator, crystal, ADC_AVDD cap), edge (J1 back, J2/J3 front), apart J1-U1, clear escape:U1 (exceptions: decaps, switches, the reference parts).
 
 ## Step 2: floorplan (before parts)
-Findings from v1's own floorplan: `FOREIGN IN FAN: J1` on U1.N and U1.W, flash LONG (6 nets, 15.6-21.1 mm), regulator caps 12.9/16.1/22.0 mm from L1, 105 block crossings, intent 102.6.
+Findings from pcb_v2's own floorplan: `FOREIGN IN FAN: J1` on U1.N and U1.W, flash LONG (6 nets, 15.6-21.1 mm), regulator caps 12.9/16.1/22.0 mm from L1, 105 block crossings, intent 102.6.
 Decisions: J1 stays at x=149 on the back edge (design.md 7.2), **U1 moves to x=169** (CX+20), y=9.5: that puts its 16 front-side signals exactly in the 8.1 mm hole-free channel
 between the row-4 switch holes (x=164.08 / 173.92), puts the unused side (GPIO4-20) toward the back edge (only decaps there), the regulator side (pins 61-80) toward J1 and the
 crystal/SWD side away from it. THETA=270 (mirror to B.Cu), found by `mcu_block.py` from "pin 49 at the front, pin 1 at the back".
@@ -31,8 +31,8 @@ Result (`badpcb floorplan`): all four escape sides "fan clear of other blocks", 
 * ADC_AVDD (pin 59) sits between IOVDD pin 60 and ADC7: planes are split around it (below),
 * FB1 straddles the strip/field boundary (3V3 pad in the strip, 3V3A pad in the field).
 `planes.py` builds the In2 split from the placement (not a constant y): +3V3 strip + 2 islands in front of U1 (pins 41/50/60 decaps) + patches at the Qwiic parts;
-+3V3A field + a 2 mm tongue up to pin 59 (via inside the package outline) + a peninsula at FB1.2. `badpcb audit --only PLANE`: 0 findings (v1: ERR over wrong plane).
-`fanout.py`: 80 plane stubs+vias, U1 power pins inward (inside the package outline), nothing locked (v1 locked all).
++3V3A field + a 2 mm tongue up to pin 59 (via inside the package outline) + a peninsula at FB1.2. `badpcb audit --only PLANE`: 0 findings (pcb_v2: ERR over wrong plane).
+`fanout.py`: 80 plane stubs+vias, U1 power pins inward (inside the package outline), nothing locked (pcb_v2 locked all).
 
 ## Step 4: gate (before any routing)
 `report --section summary`: METRICS unrouted=178 (41 nets) X=329 inversions=8 intent=1.2. `audit`: 0 ERR, 2 WARN (ROLES filter caps 8-11 mm from pins; INTENT C23 5.2 mm from pin 59), accepted by
@@ -47,8 +47,8 @@ What each pass told me:
 * U1 region first pass (any variant): 26-29 of 29 nets escaped in 142-180 s, 0 DRC errors (rule area U1_FINE: 0.10/0.10).
 * **Reference copper**: the reference draws VREG_LX and the local +1V1/+3V3/PGND as small pours. Copying them as zones looked right (drift 0) but `badpcb` treats any layer that carries a netted zone as a plane layer
   (`model.plane_layers`), so "KRT on F.Cu" only: pass 5 routed 4 of 26 nets in 443 s. Replaced by (a) a scripted straight LX track between the C7/C6 pad rows (reference footprint `C_0402_1005Metric_small_pads` for C6/C7 so it fits),
-  (b) a +1V1 ring on F.Cu above the bottom-mounted U1 through the four inward 1V1 vias (pins 10/32/51/65), (c) copied reference tracks only for crystal and VREG_AVDD, unlocked. After that VREG_LX and +1V1 never failed again (v1: C18-C20 13-22 mm away, LX/+1V1 were among the last open nets).
-* Nothing is locked anywhere (v1 locked every stub, lane and mimic track).
+  (b) a +1V1 ring on F.Cu above the bottom-mounted U1 through the four inward 1V1 vias (pins 10/32/51/65), (c) copied reference tracks only for crystal and VREG_AVDD, unlocked. After that VREG_LX and +1V1 never failed again (pcb_v2: C18-C20 13-22 mm away, LX/+1V1 were among the last open nets).
+* Nothing is locked anywhere (pcb_v2 locked every stub, lane and mimic track).
 
 ## Step 6: escalate upward, not patch (what actually happened)
 Rule: more than ~2 repair passes in a region or ping-pong -> back to floorplan/placement/pin map. It fired three times, each time I changed the board and restarted the chain:
