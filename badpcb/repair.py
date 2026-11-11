@@ -94,6 +94,56 @@ def describe(p, radius):
     return s
 
 
+def open_cuts(ctx):
+    """{cut handle: {"id": C12, "nets": [...], "n": open conns, "dem": d, "cap": c}} for the cuts the still-open connections cross.
+    The handle is the cut's label ('U1 ring S') or 'regionA|regionB': stable across passes while the placement does not change,
+    unlike the names of the nets that fail on it."""
+    T, rn = ctx.T, ctx.rn
+    out = {}
+    for cid, cut in T.cuts.items():
+        crossing = T.cut_cross.get(cid, {})
+        hit = [i for i in crossing if i < len(rn.conns)]
+        if not hit:
+            continue
+        h = cut.label or "%s|%s" % (cut.a, cut.b)
+        e = out.setdefault(h, {"id": cid, "nets": [], "n": 0, "dem": T.demand(cid), "cap": cut.cap_total})
+        e["n"] += len(hit)
+        e["nets"] = sorted(set(e["nets"]) | {rn.conns[i].net for i in hit})
+    return out
+
+
+def cut_cycle(history, window=3, max_open=8):
+    """Ping-pong keyed on the cut handle. history: [{"n": open conns, "cuts": {handle: {"nets": [...], "n": k}}}] oldest first, this pass last.
+    Fires when, in each of the last `window` passes, a few connections (<= max_open) are open, ONE cut handle carries at least half of them and
+    the nets failing on it are not the same in every pass (the failure rotates over the same cut). -> {"handle", "id", "nets", "per_pass"} or None."""
+    h = [x for x in history[-window:] if x.get("cuts") is not None]
+    if len(h) < window or any(not (0 < x.get("n", 0) <= max_open) for x in h):
+        return None
+    common = set(h[0]["cuts"])
+    for x in h[1:]:
+        common &= set(x["cuts"])
+    best = None
+    for k in sorted(common):
+        if all(x["cuts"][k]["n"] * 2 >= x["n"] for x in h):
+            sets = [frozenset(x["cuts"][k]["nets"]) for x in h]
+            if len(set(sets)) > 1 and (best is None or sum(x["cuts"][k]["n"] for x in h) > best[0]):
+                best = (sum(x["cuts"][k]["n"] for x in h), k, sets)
+    if not best:
+        return None
+    _, k, sets = best
+    return {"handle": k, "id": h[-1]["cuts"][k].get("id"), "nets": sorted(set().union(*sets)), "per_pass": [sorted(x) for x in sets],
+            "dem": h[-1]["cuts"][k].get("dem"), "cap": h[-1]["cuts"][k].get("cap")}
+
+
+def cut_cycle_advice(c, target="S", fan_ref=None):
+    return ("WARNING ping-pong on cut '%s'%s: the last passes each left a few open connections across it but with different nets (%s). The nets rotate, "
+            "the cut is the constant: it cannot take its bundle%s. Another pass will not converge: ESCALATE to placement (PLAYBOOK step 2/3): "
+            "clear that corridor (`badpcb audit %s --only CHANNEL,ESCAPE`, `badpcb plan %s %s`), move the parts sitting in it, or change the pin map." % (
+                c["handle"], (" (%s, dem %s/cap %s)" % (c["id"], c["dem"], c["cap"])) if c.get("id") else "",
+                " | ".join(",".join(x) for x in c["per_pass"]),
+                " (demand %s vs capacity %s)" % (c["dem"], c["cap"]) if c.get("cap") is not None else "", target, target, fan_ref or ""))
+
+
 LADDER = ["plain", "repair", "strip"]
 
 

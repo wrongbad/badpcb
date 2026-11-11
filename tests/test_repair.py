@@ -69,6 +69,53 @@ class ScopeReport(unittest.TestCase):
         self.assertEqual(repair.scope_report(p, {"A", "B"}, (0, 0, 100, 100), 4.0), [])
 
 
+def rec(n, cuts):
+    return {"n": n, "cuts": {h: {"id": "C97", "nets": sorted(nets), "n": len(nets), "dem": 4, "cap": 22} for h, nets in cuts.items()}}
+
+
+class CutCycle(unittest.TestCase):
+    def test_same_cut_rotating_nets_fires_although_net_sets_differ_a_lot(self):
+        h = [rec(3, {"U1 ring S": ["EN4", "EN5", "ADC0"]}), rec(3, {"U1 ring S": ["EN6", "EN7", "ADC3"]}), rec(3, {"U1 ring S": ["EN2", "EN5", "ADC1"]})]
+        c = repair.cut_cycle(h)
+        self.assertIsNotNone(c)
+        self.assertEqual(c["handle"], "U1 ring S")
+        self.assertEqual(len(c["nets"]), 8)
+        txt = repair.cut_cycle_advice(c, "s1", "U1")
+        self.assertIn("U1 ring S", txt)
+        self.assertIn("ESCALATE", txt)
+        self.assertIn("--only CHANNEL", txt)
+
+    def test_name_detector_would_stay_quiet_with_more_than_seven_nets_but_cut_fires(self):
+        # 4 open nets per pass, 12 distinct names over the window: the net-name ping-pong rule needs <= 7 distinct nets
+        h = [rec(4, {"U1 ring S": ["a1", "a2", "a3", "a4"]}), rec(4, {"U1 ring S": ["b1", "b2", "b3", "b4"]}), rec(4, {"U1 ring S": ["c1", "c2", "c3", "c4"]})]
+        self.assertEqual(repair.cut_cycle(h)["handle"], "U1 ring S")
+
+    def test_different_cuts_each_pass_is_not_a_cycle(self):
+        h = [rec(2, {"U1 ring S": ["a", "b"]}), rec(2, {"R4|R5": ["c", "d"]}), rec(2, {"U1 ring N": ["e", "f"]})]
+        self.assertIsNone(repair.cut_cycle(h))
+
+    def test_same_nets_same_cut_is_plain_failure_not_rotation(self):
+        h = [rec(2, {"U1 ring S": ["a", "b"]})] * 3
+        self.assertIsNone(repair.cut_cycle(h))
+
+    def test_needs_three_passes_with_cut_data_and_few_open_conns(self):
+        h = [rec(2, {"x": ["a"]}), rec(2, {"x": ["b"]})]
+        self.assertIsNone(repair.cut_cycle(h))
+        h = [{"n": 2, "cuts": None}] + h
+        self.assertIsNone(repair.cut_cycle(h))                                   # old passes.jsonl records without cut data
+        big = [rec(40, {"x": ["a"] * 40}), rec(40, {"x": ["b"] * 40}), rec(40, {"x": ["c"] * 40})]
+        self.assertIsNone(repair.cut_cycle(big))
+
+    def test_open_cuts_from_a_topology(self):
+        from badpcb import cli
+        b = Plan().board()
+        c = cli.Ctx(b)
+        cuts = repair.open_cuts(c)
+        self.assertTrue(isinstance(cuts, dict))
+        for h, e in cuts.items():
+            self.assertTrue(e["n"] >= 1 and e["nets"])
+
+
 class Ladder(unittest.TestCase):
     def test_escalation(self):
         h = [{"mode": "plain", "names": ["ADC2"]}, {"mode": "plain", "names": ["ADC4"]}, {"mode": "plain", "names": ["ADC7"]}]

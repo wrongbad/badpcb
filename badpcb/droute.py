@@ -478,7 +478,17 @@ def main_args(a):
                 print("  " + ln_)
     except Exception:
         pass
-    rec = dict(measure=m, wall=wall, nets=len(nets), pass_=k, krt=s, mode=mode)
+    from . import repair as RP
+    cuts = RP.open_cuts(c2)
+    try:                                   # second detector: the same cut keeps failing while the net names rotate
+        recs = [json.loads(l) for l in open(os.path.join(pd, "passes.jsonl")) if l.strip()]
+        hist = [{"n": r_["measure"]["unrouted_conns"], "cuts": r_.get("cuts")} for r_ in recs] + [{"n": m["unrouted_conns"], "cuts": cuts}]
+        cyc = RP.cut_cycle(hist)
+        if cyc:
+            print("  " + RP.cut_cycle_advice(cyc, name if not is_board else a.target, a.fanout))
+    except Exception as ex:
+        print("  (cut cycle check unavailable: %s)" % ex)
+    rec = dict(measure=m, wall=wall, nets=len(nets), pass_=k, krt=s, mode=mode, cuts=cuts)
     with open(os.path.join(pd, "passes.jsonl"), "a") as fh:
         fh.write(json.dumps(rec, default=list) + "\n")
     return m
