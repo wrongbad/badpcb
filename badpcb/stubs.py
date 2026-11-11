@@ -57,10 +57,9 @@ def main(src, dst):
     pj = dst.rsplit(".", 1)[0] + ".stubs.plan.json"
     rj = dst.rsplit(".", 1)[0] + ".stubs.rep.json"
     json.dump(P, open(pj, "w"))
-    r = config.kipy_run(["-m", "badpcb.apply", "--write", pj, os.path.abspath(src), os.path.abspath(dst), rj], cwd=config.current().root)
+    from . import apply as AP
+    json.dump(AP.write(P, os.path.abspath(src), os.path.abspath(dst)), open(rj, "w"))
     print("plane stubs: %d vias added, %d islands without a legal spot%s" % (len(P["vias_add"]), len(failed), (": " + "; ".join(failed)) if failed else ""))
-    if not os.path.exists(dst):
-        print(r.stderr[-1500:])
 
 
 if __name__ == "__main__":

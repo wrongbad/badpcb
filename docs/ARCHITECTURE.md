@@ -10,9 +10,11 @@ an RP2350B (QFN-80, 0.4 mm) at U1, 8 EN nets × 8 SENSE/ADC nets. Freerouting ra
 Nothing in the package is specific to it: per-board facts live in `badpcb.json` (README, `badpcb/config.py`).
 
 ## Principles
-1. **pcbnew only at the edges.** `extract.py` (run with `$KIPY`) dumps the board into
-   `model.json`. `apply.py` (`$KIPY`) writes the kernel's results back to a `.kicad_pcb`.
-   Everything else is pure Python 3 (stdlib + numpy if available), so it's fast and testable.
+1. **No KiCad in the loop.** `sexpr.py` + `kicad_pcb.py` read and edit `.kicad_pcb` text directly
+   (lazy lossless S-expression document; edits are text patches, so untouched nodes stay byte-identical and
+   diffs stay small). `extract.py` dumps the board into `model.json`; `apply.py` writes the kernel's results
+   back to a `.kicad_pcb`. Everything is pure Python 3 (stdlib + numpy if available), so it's fast and testable.
+   KiCad (`kicad-cli`) is only the sign-off tool: DRC, zone refill, fab output.
 2. **Named handles everywhere.** Regions `R<n>`, cuts `C<n>`, conflict clusters `K<n>`, nets by
    name, parts by refdes. IDs are deterministic for the same geometry.
 3. **Every call has a budget and returns diagnostics.** No opaque long runs. Each call takes
@@ -23,9 +25,12 @@ Nothing in the package is specific to it: per-board facts live in `badpcb.json` 
 ## Layout
 ```
 badpcb/
-  config.py       badpcb.json discovery, state dir (.badpcb/), tool lookup ($KIPY, $KICAD_CLI, $KRT_DIR, $KRT_PY)
-  extract.py      $KIPY: .kicad_pcb -> model.json
-  apply.py        $KIPY: model.json/state + routes -> .kicad_pcb
+  config.py       badpcb.json discovery, state dir (.badpcb/), tool lookup ($KICAD_CLI, $KRT_DIR, $KRT_PY)
+  sexpr.py        lossless lazy S-expression document, patch edits, KiCad-style formatting
+  kicad_pcb.py    .kicad_pcb reader/editor: footprints (pose, flip), pads, tracks, vias, zones, net formats (named/numbered)
+  extract.py      .kicad_pcb -> model.json
+  apply.py        model.json/state + routes -> .kicad_pcb (plan + in-process writer)
+  strip_nets.py   delete tracks/vias by net or uuid
   model.py        dataclasses: Board, Part, Pad, Net, Track, Via, Zone, Rules; load/save JSON
   swaps.py        swap-group declarations + legality checks (groups come from badpcb.json "swaps")
   geom.py         segment intersection, point-in-polygon, MST, etc.
@@ -64,8 +69,8 @@ estimated vias, wirelength, unrouted count, DRC errors (only after detailed rout
 
 ## Phase 4 notes (apply + droute on KiCadRoutingTools)
 Decision: no own detailed router. KRT is located by $KRT_DIR / $KRT_PY (or badpcb.json `krt`), own venv; `source scripts/krt_env.sh`.
-- `python3 -m badpcb apply SESSION out.kicad_pcb` (plan in py3, writer under $KIPY via `-m badpcb.apply`, PYTHONPATH set by badpcb; every $KIPY entry point exits through
-  `kipy_exit.done()` = os._exit, because pcbnew segfaults at interpreter teardown). Writes `swaps_applied.md` beside the board.
+- `python3 -m badpcb apply SESSION out.kicad_pcb` (plan and writer both in-process python3; the writer patches the board text, see `kicad_pcb.py`).
+  Stored zone fills are dropped when anything changed (KiCad / `kicad-cli pcb drc --refill-zones` refill them). Writes `swaps_applied.md` beside the board.
 - `python3 -m badpcb droute SESSION|BOARD [--nets ..|--region R8|--component ..] [--fanout U1] [--grid mm|auto] [--time S] [--preview]`;
   passes chain (.badpcb/routes/<session>/passNN.kicad_pcb, current.kicad_pcb). `--measure` prints the METRICS line of any board.
 - Grading DRC always uses the ORIGINAL project rules (badpcb.json rules.project, else the input board's own .kicad_pro) (KRT lowers clearance/drill floors in the project it writes).
@@ -119,4 +124,6 @@ and legal.py verdict (read-only). `badpcb suggest S audit` returns the best fix 
 - `badpcb.json` (cwd or parent, `--project`, `$BADPCB_PROJECT`) holds board facts: rules project, mcu / fine-pitch parts, swap groups, lock classes + lane trim
   settings, plane hints, KRT location. No file: auto-detect fine-pitch parts, no groups, no classes.
 - State (`sessions/`, `routes/`, `cache/`) lives in `<project dir>/.badpcb/` or `$BADPCB_HOME`; session files store the board path relative to the project.
-- `$KIPY` entry points (`-m badpcb.extract|apply|strip_nets`) are run by `config.kipy_run`, which puts the badpcb package on PYTHONPATH.
+- `-m badpcb.extract|apply --write|strip_nets` are plain python3 entry points, also called in-process (no subprocess, no `$KIPY`).
+- Flip/rotate emulate pcbnew (Flip about the origin + SetOrientation): the footprint keeps the requested angle, local y of all children is negated,
+  pad angles are negated relative to the footprint, F./B. layers swap, `(justify mirror)` toggles. Verified against pcbnew 10 for 0/90/180/270.

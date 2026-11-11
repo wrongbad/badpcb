@@ -103,7 +103,7 @@ report -> feasibility -> audit -> fix (small!) -> groute score -> scoped droute 
    hints: corridor/layer/priority/freeze). `badpcb audit S --gscore 60` / `badpcb suggest S audit --gscore 60` rank each finding's fixes
    by a groute run. It is coarse (1 mm cells do not see the U1 fan; 0.25 mm sees it but takes ~40 s), so treat "score gets worse" as a
    veto and "same" as no information.
-6. **Apply + scoped routing.** `badpcb apply S out.kicad_pcb` checks that the written board has the session's metrics and no new DRC errors.
+6. **Apply + scoped routing.** `badpcb apply S out.kicad_pcb` checks that the written board has the session's metrics and no new DRC errors. The writer edits the board file in place (no KiCad needed) and drops stale zone fills; DRC refills them (`--refill-zones`).
    Route with `badpcb droute S --region R8 --fanout U1` (first pass; `--nets`, `--component` narrow the scope; always <= 10 min, kill the
    process group on timeout). Chain passes (`current.kicad_pcb`); lock/trim-only `act`s patch the routed board in place.
 7. **Read the failure, then pick the next rung.** droute prints OPEN connections with region/cut handles and the blockers marked

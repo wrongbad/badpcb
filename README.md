@@ -9,11 +9,11 @@ The idea
 - **What-if before commit**: small typed, reversible actions (`move`, `rot`, `flip`, `swap`, `assign`, `via`, `reshape`, `unlock`, hints...) in sessions with undo/snapshot/branch/diff. `badpcb eval` scores candidates (delta of crossings, overflow, wirelength...) without applying them.
 - **Intent and floorplan**: `intent` in `badpcb.json` (soft near/apart/edge/clear/block constraints and reference layouts, scored as `intent=`), `badpcb floorplan` (blocks, fill, block-level crossings, what faces each fine-pitch IC side, long critical links).
 - **Explanations**: `badpcb audit` (placement linter with ranked, legality-checked fixes), `badpcb plan` (joint placement of an IC's fan-zone intruders and role parts), global router (`badpcb groute`, PathFinder with blockage history) and `badpcb droute` (scoped KiCadRoutingTools passes reported as open connections with region/cut handles and the locked copper that blocks them).
-- **pcbnew only at the edges**: extraction and board writing run under KiCad's python; everything else is stdlib Python.
+- **No KiCad in the loop**: badpcb reads and edits `.kicad_pcb` files itself (pure stdlib S-expression editor: lossless, only the touched tokens change). KiCad is only the sign-off tool (`kicad-cli`: DRC, zone refill, fab output). Board projects' own build scripts may still use `pcbnew`; badpcb does not need it.
 
 ## Requirements
 - Python 3.9+ (stdlib only; `numpy` optional).
-- KiCad 9 or 10. Its bundled python (has `pcbnew`) is used as `$KIPY` for extract/apply; `kicad-cli` for DRC.
+- KiCad 8, 9 or 10 board files (tested on 10). `kicad-cli` is needed only for DRC / zone refill (`badpcb apply` verification); no `pcbnew`, no KiCad python.
 - Optional, for `badpcb droute`: [KiCadRoutingTools](https://github.com/) (KRT) plus its own venv (numpy, scipy, shapely, Pillow; not KiCad's python).
 
 ## Install
@@ -21,13 +21,12 @@ The idea
 pip install -e .            # console script `badpcb`
 # or from a checkout, no install:
 export PYTHONPATH=/path/to/badpcb-checkout      # then: python3 -m badpcb ...
-source scripts/krt_env.sh                   # KRT_DIR / KRT_PY / KIPY / KICAD_CLI defaults
+source scripts/krt_env.sh                   # KRT_DIR / KRT_PY / KICAD_CLI defaults
 ```
 
 ## Environment variables
 | var | meaning | default |
 |---|---|---|
-| `KIPY` | KiCad's python (pcbnew) | first existing of the macOS app bundle, `/usr/lib/kicad/bin/python3` |
 | `KICAD_CLI` | kicad-cli | `kicad-cli` on PATH, else the macOS app bundle |
 | `KRT_DIR` / `KRT_PY` | KiCadRoutingTools checkout / its python | `badpcb.json` `krt`, else `~/KiCadRoutingTools` and `~/KiCadRoutingTools/.venv/bin/python` |
 | `BADPCB_PROJECT` | badpcb.json (or its directory) | badpcb.json in the cwd or a parent |
@@ -128,7 +127,7 @@ Steps 4-5 are the inner loop `report -> feasibility -> audit -> small fix -> gro
 Keep the board repo free of kernel code: put `badpcb.json` (+ swaps and lock files) next to the board, `export PYTHONPATH=/path/to/badpcb` (or `pip install -e`), run from the board directory. State lands in the board's `.badpcb/`. Board-specific tests go in the board project and run against the shared package (`PYTHONPATH=../badpcb python3 -m unittest discover -s rk_board_tests -t .`).
 
 ## Tests
-`python3 -m unittest discover -s tests -t .` (synthetic, no KiCad needed). `tests/test_board_smoke.py` is skipped unless `BADPCB_TEST_BOARD=/path/board.kicad_pcb` (needs `$KIPY`).
+`python3 -m unittest discover -s tests -t .` (synthetic, no KiCad needed; the parser/writer tests use the small boards in `tests/fixtures/`, and one test is skipped unless `kicad-cli` is installed). `tests/test_board_smoke.py` is skipped unless `BADPCB_TEST_BOARD=/path/board.kicad_pcb`.
 
 ## License
 

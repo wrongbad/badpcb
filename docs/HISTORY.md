@@ -5,7 +5,7 @@ Freerouting ran for hours and left many nets open. badpcb was built so an LLM ag
 Numbers below are that board's; the lessons are general.
 
 ## Phases
-1. **Foundation**: pcbnew only at the edges (extract/apply under `$KIPY`), pure-Python model, ratsnest MST per net, region/cut topology with
+1. **Foundation**: pcbnew only at the edges (extract/apply under `$KIPY`; since replaced by the pure-python `kicad_pcb.py` reader/writer, no KiCad python needed), pure-Python model, ratsnest MST per net, region/cut topology with
    named handles (R8, C12, K1), conflict matrix and clusters, ASCII map, swap-group legality, `report`.
 2. **Actions + what-if**: typed reversible actions (move/rot/flip/swap/assign/via...), sessions with undo/snapshot/branch/revert, `eval` (delta metrics
    without committing; incremental result == from-scratch result is a test).
@@ -33,7 +33,7 @@ pull the ADC filter capacitor from 11.3 to 6.6 mm of its pin, strip and re-escap
 - Measure every step with one yardstick (`droute --measure`); for placement look at the open connections near the IC under study, not the board total.
 - Cycle detection matters: three passes of the same kind that move the failure around mean change the board, not the pass.
 - Time boxes (pass <= 10 min), kill the whole process group on timeout, flush progress when piped.
-- Every `$KIPY` entry point must exit through `kipy_exit.done()` (pcbnew segfaults at interpreter teardown).
+- (Historical) pcbnew segfaults at interpreter teardown, so every `$KIPY` entry point had to exit through `os._exit`; no longer relevant.
 
 ## key_board_v2: the start-right respin
 After an EE review blamed v1's struggle on three initial conditions (external QSPI flash far from U1, the reference layout not respected, J1 in U1's escape path),

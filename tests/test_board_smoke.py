@@ -1,4 +1,4 @@
-"""Opt-in smoke test on any real board: BADPCB_TEST_BOARD=/path/to/board.kicad_pcb (needs $KIPY for extraction)."""
+"""Opt-in smoke test on any real board: BADPCB_TEST_BOARD=/path/to/board.kicad_pcb."""
 import os
 import unittest
 
@@ -7,7 +7,7 @@ from badpcb import cli, config
 BOARD = os.environ.get("BADPCB_TEST_BOARD", "")
 
 
-@unittest.skipUnless(BOARD and os.path.exists(BOARD) and config.kipy_available(), "set BADPCB_TEST_BOARD to a .kicad_pcb (and have KiCad's python)")
+@unittest.skipUnless(BOARD and os.path.exists(BOARD), "set BADPCB_TEST_BOARD to a .kicad_pcb")
 class BoardSmoke(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -17,7 +17,7 @@ def qfn_part(ref, n=20, pitch=0.4):
 class TestProject(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        self._env = {k: os.environ.get(k) for k in ("BADPCB_PROJECT", "BADPCB_HOME", "KRT_DIR", "KRT_PY", "KIPY", "KICAD_CLI")}
+        self._env = {k: os.environ.get(k) for k in ("BADPCB_PROJECT", "BADPCB_HOME", "KRT_DIR", "KRT_PY", "KICAD_CLI")}
         for k in self._env:
             os.environ.pop(k, None)
         self._cwd = os.getcwd()
@@ -71,9 +71,8 @@ class TestProject(unittest.TestCase):
         os.environ["KRT_DIR"] = "/opt/krt"
         os.environ["KRT_PY"] = "/opt/py"
         self.assertEqual((P.krt_dir(), P.krt_py()), ("/opt/krt", "/opt/py"))
-        os.environ["KIPY"] = "/opt/kipy"
         os.environ["KICAD_CLI"] = "/opt/cli"
-        self.assertEqual((config.kipy(), config.kicad_cli()), ("/opt/kipy", "/opt/cli"))
+        self.assertEqual(config.kicad_cli(), "/opt/cli")
 
     def test_auto_fine_pitch_detection(self):
         b = synth.board([qfn_part("U5"), synth.part("R1", [synth.pad("1", (50, 5), "N"), synth.pad("2", (51, 5), "M")], pos=(50, 5))])

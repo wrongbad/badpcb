@@ -355,7 +355,8 @@ def main_args(a):
             idf = os.path.join(pd, "pass%d.repair.ids.json" % k)
             json.dump(rpl["ids"], open(idf, "w"))
             rsrc = os.path.join(pd, "pass%d.repair.kicad_pcb" % k)
-            config.kipy_run(["-m", "badpcb.strip_nets", src, rsrc, "--ids", idf], cwd=config.current().root)
+            from . import strip_nets
+            strip_nets.strip(src, rsrc, ids=set(rpl["ids"]))
             if os.path.exists(rsrc):
                 AP.copy_rules(rsrc, getattr(a, "rules_pro", None))
                 src = rsrc
@@ -380,7 +381,8 @@ def main_args(a):
         plane = set(board.plane_nets())
         ssrc = os.path.join(pd, "pass%d.strip.kicad_pcb" % k)
         P = {"tracks_del": [t for t in board.tracks if t.net in nets and t.net not in plane], "vias_del": [v for v in board.vias if v.net in nets and v.net not in plane]}
-        r = config.kipy_run(["-m", "badpcb.strip_nets", src, ssrc] + [n for n in nets if n not in plane], cwd=config.current().root)
+        from . import strip_nets
+        strip_nets.strip(src, ssrc, nets=[n for n in nets if n not in plane])
         print("  strip: removed copper of %d scope nets (%d tracks, %d vias) so they escape together" % (len(nets), len(P["tracks_del"]), len(P["vias_del"])))
         if os.path.exists(ssrc):
             AP.copy_rules(ssrc, getattr(a, "rules_pro", None))

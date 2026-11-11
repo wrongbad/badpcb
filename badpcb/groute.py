@@ -65,7 +65,7 @@ INF = float("inf")
 
 # ----------------------------------------------------------------------------------------- loading
 def load_board(path):
-    """.json -> model.load; .kicad_pcb -> extract with $KIPY (same cache as cli.py)."""
+    """.json -> model.load; .kicad_pcb -> extract (same cache as cli.py)."""
     from . import cli
     return cli.load_board(path)
 

@@ -1,8 +1,8 @@
 """Session -> .kicad_pcb.   `python3 -m badpcb apply SESSION out.kicad_pcb [--in board] [--no-verify]`
 
-Two stages so that all badpcb logic stays in plain python3 and only the board edit needs pcbnew:
-  plan(state)            python3: diff of the session's final board vs. its base -> JSON plan
-  write(plan, in, out)   $KIPY (`$KIPY -m badpcb.apply --write plan.json in.kicad_pcb out.kicad_pcb report.json`)
+Two stages, both plain python3 (no KiCad needed; the board file is edited in place through badpcb.kicad_pcb):
+  plan(state)            diff of the session's final board vs. its base -> JSON plan
+  write(plan, in, out)   edits the .kicad_pcb text (`python3 -m badpcb.apply --write plan.json in.kicad_pcb out.kicad_pcb report.json`)
 The orchestrator `run()` does both, then verifies: re-extracts the written board and compares badpcb metrics with the
 session's METRICS, and diffs kicad-cli DRC (input vs output) so that new clearance/courtyard errors are visible.
 
@@ -14,7 +14,7 @@ must belong to a live board), re-nets pads, adds copper, then RIPS UP copper mad
   * unprotected copper closer than the board clearance to a changed pad of another net   -> removed
   * cascade: unprotected stubs/vias that lost their only attachment through a removal    -> removed
 Copper of `protect` lock classes (uuid -> class carried in the plan) is kept unless shorted/broken by a changed pad.
-Zones are refilled. Everything removed is listed in the report. swaps_applied.md lists the netlist/firmware changes.
+Stale zone fills are dropped (KiCad / `kicad-cli pcb drc --refill-zones` refill them). Everything removed is listed in the report. swaps_applied.md lists the netlist/firmware changes.
 """
 import json
 import math
@@ -25,7 +25,7 @@ import sys
 from . import config, locks
 
 
-# ============================================================================== plan (python3, no pcbnew)
+# ============================================================================== plan (python3)
 def _k(*v):
     return tuple(round(x, 3) if isinstance(x, float) else x for x in v)
 
@@ -154,73 +154,69 @@ def _pt_in_pad(pad, p, tol=0.02):
     return pad_dist(pad, p, p) <= tol
 
 
-# ============================================================================== writer ($KIPY)
+class _Grid:
+    """Tiny spatial hash: items registered under every cell their (centre, radius) disc touches; query(p) -> candidates."""
+
+    def __init__(self, cell):
+        self.cell, self.cells = cell, {}
+
+    def add(self, obj, cx, cy, r):
+        c = self.cell
+        for ix in range(int((cx - r) // c), int((cx + r) // c) + 1):
+            for iy in range(int((cy - r) // c), int((cy + r) // c) + 1):
+                self.cells.setdefault((ix, iy), []).append(obj)
+
+    def query(self, p):
+        c = self.cell
+        return self.cells.get((int(p[0] // c), int(p[1] // c)), ())
+
+
+def _pad_grid(pads, cell=2.0):
+    g = _Grid(cell)
+    for pd in pads:
+        g.add(pd, pd["pos"][0], pd["pos"][1], math.hypot(pd["size"][0], pd["size"][1]) / 2.0 + 0.1)
+    return g
+
+
+# ============================================================================== writer (pure python, badpcb.kicad_pcb)
 def write(plan_, src, dst):
-    import pcbnew as p
-    MM, TOMM = p.FromMM, p.ToMM
-    board = p.LoadBoard(src)            # keep `board` alive for the whole run (footprints hold a raw pointer to it)
-    zones0 = [z for z in board.Zones() if not z.GetIsRuleArea()] if plan_.get("zones") else []   # (typed wrappers are gone after the edits below)
+    from .kicad_pcb import Board
+    board = Board.load(src)
     rep = {"moved": [], "renet": [], "vias_added": 0, "tracks_added": 0, "removed": [], "kept_protected_warnings": [],
            "placement_mismatch": [], "flip_skipped": []}
-    # zone outlines first: pcbnew's typed wrappers (Zones(), Cast_to_ZONE) stop working after footprints/tracks are edited
+    dirty = False                       # any change that invalidates the stored zone fills
     if plan_.get("zones"):
-        zs = zones0                                                          # same order as badpcb.extract
+        zs = [z for z in board.zones if not z.is_rule_area]                  # same order as badpcb.extract
         rep["zones_reshaped"] = []
         for zc in plan_["zones"]:
             z = zs[zc["idx"]]
-            if z.GetNetname() != zc["net"]:
-                rep["zones_reshaped"].append("SKIPPED zone %d: net %s != %s" % (zc["idx"], z.GetNetname(), zc["net"]))
+            if z.net != zc["net"]:
+                rep["zones_reshaped"].append("SKIPPED zone %d: net %s != %s" % (zc["idx"], z.net, zc["net"]))
                 continue
-            def outline(polys):
-                ps = p.SHAPE_POLY_SET()
-                for poly in polys:
-                    o = ps.NewOutline()
-                    for x, y in poly["outer"]:
-                        ps.Append(MM(x), MM(y), o)
-                    for h in poly["holes"]:
-                        hi = ps.NewHole(o)
-                        for x, y in h:
-                            ps.Append(MM(x), MM(y), o, hi)
-                ps.thisown = False          # ZONE::SetOutline takes ownership of the pointer (python freeing it too = double free)
-                return ps
-            sibs = [p.Cast_to_ZONE(z.Duplicate(False)) for _ in zc["polys"][1:]]     # a saved zone holds ONE polygon: further pieces become sibling zones
-            z.SetOutline(outline(zc["polys"][:1]))
-            for nz, extra in zip(sibs, zc["polys"][1:]):
-                nz.SetOutline(outline([extra]))
-                board.Add(nz)
+            board.reshape_zone(z, zc["polys"])
+            dirty = True
             rep["zones_reshaped"].append("%s %s: %d polygon(s)" % (zc["net"], "/".join(zc["layers"]), len(zc["polys"])))
     prot = dict(plan_.get("protect", {}))                  # uuid -> lock class name (protect-enabled classes)
-    lname = lambda lid: board.GetLayerName(lid)
-    lid = board.GetLayerID
 
     def pad_info(pd):
-        sz = pd.GetSize()
-        shp = {p.PAD_SHAPE_CIRCLE: "circle", p.PAD_SHAPE_OVAL: "oval", p.PAD_SHAPE_ROUNDRECT: "roundrect"}.get(pd.GetShape(), "rect")
-        lays = {lname(l) for l in pd.GetLayerSet().CuStack()}
-        pos = pd.GetPosition()
-        return {"id": "%s.%s" % (pd.GetParentFootprint().GetReference(), pd.GetNumber()), "ref": pd.GetParentFootprint().GetReference(),
-                "pos": (TOMM(pos.x), TOMM(pos.y)), "size": (TOMM(sz.x), TOMM(sz.y)), "rot": pd.GetOrientationDegrees(), "shape": shp,
-                "layers": lays, "net": pd.GetNetname()}
+        pos = tuple(round(v, 6) for v in pd.world())           # pcbnew works in integer nm
+        shp = pd.shape if pd.shape in ("circle", "oval", "roundrect") else "rect"
+        return {"id": "%s.%s" % (pd.fp.ref, pd.num), "ref": pd.fp.ref, "pos": pos, "size": pd.size, "rot": pd.abs_angle, "shape": shp,
+                "layers": set(board.expand_cu(pd.layer_names)), "net": pd.net}
 
     def all_pads():
-        return [pad_info(pd) for f in board.GetFootprints() for pd in f.Pads()]
+        return [pad_info(pd) for f in board.footprints for pd in f.pads]
 
     def item_info(t):
-        if t.GetClass() == "PCB_VIA":
-            pos = t.GetPosition()
-            return {"obj": t, "kind": "via", "a": (TOMM(pos.x), TOMM(pos.y)), "b": (TOMM(pos.x), TOMM(pos.y)),
-                    "w": TOMM(t.GetWidth(0)), "layers": {lname(l) for l in t.GetLayerSet().CuStack()}, "net": t.GetNetname(),
-                    "uuid": t.m_Uuid.AsString(), "locked": bool(t.IsLocked())}
-        a, b = t.GetStart(), t.GetEnd()
-        return {"obj": t, "kind": "track", "a": (TOMM(a.x), TOMM(a.y)), "b": (TOMM(b.x), TOMM(b.y)), "w": TOMM(t.GetWidth()),
-                "layers": {lname(t.GetLayer())}, "net": t.GetNetname(), "uuid": t.m_Uuid.AsString(), "locked": bool(t.IsLocked())}
+        return {"obj": t, "kind": t.kind, "a": t.a, "b": t.b, "w": t.w, "layers": t.copper_layers(), "net": t.net,
+                "uuid": t.uuid, "locked": t.locked}
 
-    def touch(it, pads):
+    def touch(it, grid):
         """pad ids that a track end / via centre lies inside (same layer)."""
         out = {}
         for end in ("a", "b"):
             pt = it[end]
-            for pd in pads:
+            for pd in grid.query(pt):
                 if (pd["layers"] & it["layers"]) and _pt_in_pad(pd, pt):
                     out.setdefault(end, set()).add(pd["id"])
         return out
@@ -228,57 +224,55 @@ def write(plan_, src, dst):
     unlock, lock = set(plan_.get("unlock", [])), set(plan_.get("lock", []))
     for u in unlock:                      # unlocked copper is ordinary copper for the rip-up analysis below
         prot.pop(u, None)
-    for t in board.GetTracks():
-        u = t.m_Uuid.AsString()
-        if u in unlock:
-            t.SetLocked(False)
-        elif u in lock:
-            t.SetLocked(True)
+    for t in board.items:
+        if t.uuid in unlock:
+            t.set_locked(False)
+        elif t.uuid in lock:
+            t.set_locked(True)
     rep["unlocked"], rep["locked"] = len(unlock), len(lock)
     pads0 = all_pads()
-    items0 = [item_info(t) for t in board.GetTracks()]
+    grid0 = _pad_grid(pads0)
+    items0 = [item_info(t) for t in board.items]
     for it in items0:
         it["prot"] = prot.get(it["uuid"], "")
-        it["t0"] = touch(it, pads0)
+        it["t0"] = touch(it, grid0)
 
     # ---- parts
     changed_pads = set()
     for pp in plan_["parts"]:
-        f = board.FindFootprintByReference(pp["ref"])
+        f = board.footprint(pp["ref"])
         if f is None:
             rep["placement_mismatch"].append("%s: not on board" % pp["ref"])
             continue
-        if (pp["side"] == "B") != f.IsFlipped():
-            if f.GetBoard() is None:
-                rep["flip_skipped"].append(pp["ref"])
-                continue
-            f.Flip(f.GetPosition(), p.FLIP_DIRECTION_LEFT_RIGHT)
         want = {pd["num"]: pd["pos"] for pd in pp["pads"]}
+        pos = (pp["pos"][0], pp["pos"][1])
         best = None
         for rot in [pp["rot"], -pp["rot"], pp["rot"] + 180, 180 - pp["rot"]]:
-            f.SetPosition(p.VECTOR2I(MM(pp["pos"][0]), MM(pp["pos"][1])))
-            f.SetOrientationDegrees(rot)
-            err = max(math.hypot(TOMM(pd.GetPosition().x) - want[pd.GetNumber()][0], TOMM(pd.GetPosition().y) - want[pd.GetNumber()][1])
-                      for pd in f.Pads() if pd.GetNumber() in want) if want else 0.0
+            got = f.pad_world_map(pos, rot, pp["side"])
+            err = max(math.hypot(got[pd.num][0] - want[pd.num][0], got[pd.num][1] - want[pd.num][1])
+                      for pd in f.pads if pd.num in want) if want else 0.0
             if best is None or err < best[0]:
                 best = (err, rot)
             if err < 0.02:
                 break
         if best[0] >= 0.02:
-            f.SetOrientationDegrees(best[1])
             rep["placement_mismatch"].append("%s: pad error %.3f mm with rot %g" % (pp["ref"], best[0], best[1]))
+        f.place(pos, best[1], pp["side"])
+        dirty = True
         rep["moved"].append("%s -> (%.2f, %.2f) rot %g side %s" % (pp["ref"], pp["pos"][0], pp["pos"][1], pp["rot"], pp["side"]))
-        for pd in f.Pads():
-            changed_pads.add("%s.%s" % (pp["ref"], pd.GetNumber()))
+        for pd in f.pads:
+            changed_pads.add("%s.%s" % (pp["ref"], pd.num))
     # ---- pad nets
     for c in plan_["pads"]:
-        f = board.FindFootprintByReference(c["ref"])
-        for pd in f.Pads():
-            if pd.GetNumber() == c["num"]:
-                pd.SetNet(board.FindNet(c["net"]) if c["net"] else board.FindNet(0))
+        f = board.footprint(c["ref"])
+        for pd in f.pads:
+            if pd.num == c["num"]:
+                board.set_pad_net(pd, c["net"])
+        dirty = True
         changed_pads.add("%s.%s" % (c["ref"], c["num"]))
         rep["renet"].append("%s.%s %s -> %s" % (c["ref"], c["num"], c["old"] or "-", c["net"] or "-"))
     pads1 = all_pads()
+    grid1 = _pad_grid(pads1)
     pad1 = {pd["id"]: pd for pd in pads1}
     clr = plan_.get("clearance", 0.2)
 
@@ -290,7 +284,7 @@ def write(plan_, src, dst):
                                                       (" [%s]" % it["prot"] if it["prot"] else "") + (" [LOCKED]" if it.get("locked") else ""))
     for it in items0:
         reason = None
-        t1 = touch(it, pads1)
+        t1 = touch(it, grid1)
         # 1. attached before to a changed pad: still on a same-net pad?
         for end, ids in it["t0"].items():
             if ids & changed_pads:
@@ -299,10 +293,12 @@ def write(plan_, src, dst):
                     reason = "was attached to %s, now %s" % ("/".join(sorted(ids & changed_pads)), "no same-net pad there")
         # 2. geometry vs changed pads of a different net
         if not reason:
-            for pid in changed_pads:
+            for pid in sorted(changed_pads):
                 pd = pad1.get(pid)
                 if not pd or not (pd["layers"] & it["layers"]) or pd["net"] == it["net"]:
                     continue
+                if _seg_pt(pd["pos"], it["a"], it["b"]) - math.hypot(pd["size"][0], pd["size"][1]) / 2.0 - it["w"] / 2.0 >= clr:
+                    continue                                   # even the pad's bounding circle is clear of the item
                 d = pad_dist(pd, it["a"], it["b"]) - it["w"] / 2.0
                 if it["kind"] == "via":
                     d = pad_dist(pd, it["a"], it["a"]) - it["w"] / 2.0
@@ -317,76 +313,82 @@ def write(plan_, src, dst):
         if reason:
             removed[it["uuid"]] = (it, reason)
 
-    # 3. cascade: unprotected items that lost their only attachment through a removal
+    # 3. cascade: unprotected items that lost their only attachment through a removal (worklist over endpoint neighbours;
+    #    the result is the unique fixed point of the rule, only the report order can differ from a full rescan)
     def near(p, q, tol=0.01):
         return abs(p[0] - q[0]) < tol and abs(p[1] - q[1]) < tol
-    changed = True
-    while changed:
-        changed = False
-        rem_pts = [(e, it["layers"]) for it, _ in removed.values() for e in ((it["a"], it["b"]) if it["kind"] == "track" else (it["a"],))]
-        rem_via = [it["a"] for it, _ in removed.values() if it["kind"] == "via"]
-        for it in items0:
-            if it["uuid"] in removed or it["prot"]:
-                continue
-            ends = [it["a"], it["b"]] if it["kind"] == "track" else [it["a"]]
-            for e in ends:
-                hit = any(near(e, q) and (it["layers"] & ly or it["kind"] == "via") for q, ly in rem_pts) or any(near(e, v) for v in rem_via)
-                if not hit:
+
+    def ends_of(it):
+        return (it["a"], it["b"]) if it["kind"] == "track" else (it["a"],)
+    ends_grid = _Grid(0.05)
+    for it in items0:
+        for e in ends_of(it):
+            ends_grid.add(it, e[0], e[1], 0.0)
+
+    def around(p):
+        seen = {}
+        for dx in (-0.05, 0.0, 0.05):
+            for dy in (-0.05, 0.0, 0.05):
+                for o in ends_grid.query((p[0] + dx, p[1] + dy)):
+                    seen[id(o)] = o
+        return seen.values()
+    queue = [it for it, _ in removed.values()]
+    while queue:
+        r = queue.pop()
+        for q in ends_of(r):
+            for it in around(q):
+                if it["uuid"] in removed or it["prot"]:
                     continue
-                # anything left that holds this endpoint?
-                held = any(pd["layers"] & it["layers"] and _pt_in_pad(pd, e) and pd["net"] == it["net"] for pd in pads1)
-                if not held:
-                    for o in items0:
-                        if o is it or o["uuid"] in removed or o["net"] != it["net"]:
-                            continue
-                        oe = [o["a"], o["b"]] if o["kind"] == "track" else [o["a"]]
-                        if any(near(e, q) for q in oe) and (o["kind"] == "via" or it["kind"] == "via" or o["layers"] & it["layers"]):
-                            held = True
-                            break
-                if not held:
-                    removed[it["uuid"]] = (it, "orphaned by removal of neighbouring copper")
-                    changed = True
-                    break
+                for e in ends_of(it):
+                    if not near(e, q) or not (r["kind"] == "via" or it["layers"] & r["layers"] or it["kind"] == "via"):
+                        continue
+                    # anything left that holds this endpoint?
+                    held = any(pd["layers"] & it["layers"] and _pt_in_pad(pd, e) and pd["net"] == it["net"] for pd in grid1.query(e))
+                    if not held:
+                        for o in around(e):
+                            if o is it or o["uuid"] in removed or o["net"] != it["net"]:
+                                continue
+                            if any(near(e, oq) for oq in ends_of(o)) and (o["kind"] == "via" or it["kind"] == "via" or o["layers"] & it["layers"]):
+                                held = True
+                                break
+                    if not held:
+                        removed[it["uuid"]] = (it, "orphaned by removal of neighbouring copper")
+                        queue.append(it)
+                        break
     for u, (it, reason) in removed.items():
-        board.Remove(it["obj"])
+        it["obj"].delete()
         it["obj"] = None
+        dirty = True
         rep["removed"].append({"what": tag(it), "net": it["net"], "reason": reason, "protected": it["prot"]})
 
     # ---- new copper
-    # explicit deletions: match against the items listed at the start (pcbnew's typed wrappers stop iterating after the first board.Remove)
+    # explicit deletions: match against the items listed at the start
     for v in plan_["vias_del"]:
         for it in items0:
             if it["obj"] is not None and it["kind"] == "via" and it["net"] == v["net"] and abs(it["a"][0] - v["pos"][0]) < 1e-3 and abs(it["a"][1] - v["pos"][1]) < 1e-3:
-                board.Remove(it["obj"])
+                it["obj"].delete()
                 it["obj"] = None
+                dirty = True
     for t in plan_["tracks_del"]:
         for it in items0:
             if it["obj"] is not None and it["kind"] == "track" and it["net"] == t["net"] and abs(it["a"][0] - t["a"][0]) < 1e-3 and abs(it["a"][1] - t["a"][1]) < 1e-3 \
                     and abs(it["b"][0] - t["b"][0]) < 1e-3 and abs(it["b"][1] - t["b"][1]) < 1e-3:
-                board.Remove(it["obj"])
+                it["obj"].delete()
                 it["obj"] = None
+                dirty = True
     for v in plan_["vias_add"]:
-        via = p.PCB_VIA(board)
-        via.SetPosition(p.VECTOR2I(MM(v["pos"][0]), MM(v["pos"][1])))
-        via.SetViaType(p.VIATYPE_THROUGH)
-        via.SetWidth(MM(v["dia"]))
-        via.SetDrill(MM(v["drill"]))
-        via.SetLayerPair(lid(v["layers"][0]), lid(v["layers"][-1]))
-        via.SetNet(board.FindNet(v["net"]))
-        board.Add(via)
+        board.add_via(v["pos"], v["dia"], v["drill"], v["layers"], v["net"])
         rep["vias_added"] += 1
+        dirty = True
     for t in plan_["tracks_add"]:
-        tr = p.PCB_TRACK(board)
-        tr.SetStart(p.VECTOR2I(MM(t["a"][0]), MM(t["a"][1])))
-        tr.SetEnd(p.VECTOR2I(MM(t["b"][0]), MM(t["b"][1])))
-        tr.SetWidth(MM(t["w"]))
-        tr.SetLayer(lid(t["layer"]))
-        tr.SetNet(board.FindNet(t["net"]))
-        board.Add(tr)
+        board.add_track(t["a"], t["b"], t["w"], t["layer"], t["net"])
         rep["tracks_added"] += 1
-    p.ZONE_FILLER(board).Fill(board.Zones())
-    board.BuildConnectivity()
-    p.SaveBoard(dst, board)
+        dirty = True
+    if dirty:                                   # stored fills are stale now; KiCad / `kicad-cli pcb drc --refill-zones` refill them
+        for z in board.zones:
+            if not z.is_rule_area:
+                board.clear_fills(z)
+    board.save(dst)
     return rep
 
 
@@ -464,11 +466,10 @@ def run_lock_delta(session, src):
     rj = src.rsplit(".", 1)[0] + ".lockplan_report.json"
     json.dump(P, open(pj, "w"), indent=1)
     tmp = src.rsplit(".", 1)[0] + ".tmp_lock.kicad_pcb"
-    r = config.kipy_run(["-m", "badpcb.apply", "--write", pj, src, tmp, rj], cwd=config.current().root)
-    if r.returncode or not os.path.exists(rj):
-        sys.exit("apply writer failed:\n" + (r.stdout + r.stderr)[-3000:])
+    rep = write(P, src, tmp)
+    json.dump(rep, open(rj, "w"), indent=1)
     os.replace(tmp, src)
-    return json.load(open(rj)), len(P["unlock"]), len(P["lock"]), len(P["tracks_del"])
+    return rep, len(P["unlock"]), len(P["lock"]), len(P["tracks_del"])
 
 
 def run(session, out, src=None, verify=True, report_path=None):
@@ -481,10 +482,8 @@ def run(session, out, src=None, verify=True, report_path=None):
     pj = out.rsplit(".", 1)[0] + ".plan.json"
     rj = out.rsplit(".", 1)[0] + ".apply_report.json"
     json.dump(P, open(pj, "w"), indent=1)
-    r = config.kipy_run(["-m", "badpcb.apply", "--write", pj, src, out, rj], cwd=config.current().root)
-    if r.returncode or not os.path.exists(rj):   # writer exits via os._exit(0), so a nonzero code is a real failure
-        sys.exit("apply writer failed:\n" + (r.stdout + r.stderr)[-3000:])
-    rep = json.load(open(rj))
+    rep = write(P, src, out)
+    json.dump(rep, open(rj, "w"), indent=1)
     md = os.path.join(os.path.dirname(out), "swaps_applied.md")
     open(md, "w").write(swaps_md(P, cfg))
     L = ["applied session %s -> %s" % (session, out)]
@@ -527,18 +526,12 @@ def run(session, out, src=None, verify=True, report_path=None):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] == "--write":
-        from badpcb import kipy_exit
+    if argv and argv[0] == "--write":                        # python3 -m badpcb.apply --write plan.json in.kicad_pcb out.kicad_pcb report.json
         pj, src, dst, rj = argv[1:5]
-        try:
-            rep = write(json.load(open(pj)), src, dst)
-            json.dump(rep, open(rj, "w"), indent=1)
-            print("wrote", dst)
-        except BaseException:
-            import traceback
-            traceback.print_exc()
-            kipy_exit.done(1)
-        kipy_exit.done(0)
+        rep = write(json.load(open(pj)), src, dst)
+        json.dump(rep, open(rj, "w"), indent=1)
+        print("wrote", dst)
+        return
     import argparse
     ap = argparse.ArgumentParser(prog="badpcb apply")
     ap.add_argument("session")

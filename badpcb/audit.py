@@ -12,7 +12,7 @@ Design rules to stay quiet: ORIENT / BOWTIE / TENSION only report when a legal f
 connections are already routed are skipped by those three; expected parts (decaps at their pin) are not "intruders";
 overlaps are judged on the courtyard model with a tolerance (the extractor boxes are a few 0.01 mm larger than KiCad's).
 
-Pure stdlib (runs under $KIPY too). The intent ratsnest ("what the netlist wants", pad to pad MST over every signal net,
+Pure stdlib. The intent ratsnest ("what the netlist wants", pad to pad MST over every signal net,
 existing copper ignored) is what the geometric detectors see, so they work the same on a routed and an unrouted board.
 """
 import dataclasses

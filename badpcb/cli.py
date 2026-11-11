@@ -1,7 +1,7 @@
 """CLI: `badpcb report <board.kicad_pcb | model.json> [--json] [--section NAME]` (run from the board project directory).
 
 Sections: feasibility summary clusters copper cuts inversions planes mcu map  (and, full-only: matrix regions conns).
-A .kicad_pcb is extracted with $KIPY (cached in <badpcb home>/cache by mtime); a .json is loaded directly.
+A .kicad_pcb is read directly (pure python, cached in <badpcb home>/cache by mtime); a .json is loaded directly.
 Project settings (badpcb.json), state directory (.badpcb/) and external tools: see badpcb/config.py.
 """
 import argparse
@@ -16,18 +16,22 @@ from . import ascii_map, config, model, ratsnest, swaps, topo
 
 
 def extract_to_cache(path):
-    """.kicad_pcb -> cached model.json (re-extracted when older than the board); returns the model path. Needs $KIPY (pcbnew)."""
+    """.kicad_pcb -> cached model.json (re-extracted when older than the board); returns the model path."""
     cache = config.current().cache_dir
     os.makedirs(cache, exist_ok=True)
     path = os.path.abspath(path)
     tag = hashlib.md5(path.encode()).hexdigest()[:6]            # same basename in two directories must not share a cache entry
     out = os.path.join(cache, "%s.%s.model.json" % (os.path.basename(path).rsplit(".", 1)[0], tag))
     if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(path):
-        if not config.kipy_available():
-            sys.exit("badpcb: KiCad's python (pcbnew) not found: set $KIPY (tried %s)" % config.kipy())
-        r = config.kipy_run(["-m", "badpcb.extract", path, out], cwd=config.current().root)
-        if r.returncode:
-            sys.exit("extract failed:\n" + r.stderr[-2000:])
+        from . import extract
+        try:
+            m = extract.extract(path)
+        except (OSError, ValueError) as ex:
+            sys.exit("badpcb: cannot read %s: %s" % (path, ex))
+        tmp = out + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump(m, fh, separators=(",", ":"))
+        os.replace(tmp, out)
     return out
 
 
@@ -685,7 +689,6 @@ def cmd_project(a):
     print("intent       : %s" % (", ".join("%s %d" % (k, n) for k, n in sorted(__import__("collections").Counter(e["kind"] for e in P.intent().values()).items())) or "none"))
     from . import audit
     print("audit        : %s" % (" ".join("%s=%g%s" % (k, v, "*" if k in P.audit() else "") for k, v in audit.params().items()) + "   (* = overridden)"))
-    print("KIPY         : %s %s" % (config.kipy(), "" if config.kipy_available() else "(NOT FOUND)"))
     print("kicad-cli    : %s %s" % (config.kicad_cli(), "" if config.kicad_cli_available() else "(NOT FOUND)"))
     from . import droute
     print("KiCadRoutingTools: %s | %s %s" % (droute.krt_dir(), droute.krt_py(), "" if droute.available() else "(not installed: droute unavailable)"))

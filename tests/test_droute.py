@@ -5,10 +5,10 @@ import shutil
 import tempfile
 import unittest
 
-from badpcb import droute, cli, apply as AP
+from badpcb import config, droute, cli, apply as AP
 
 EX = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "key_board_placed.kicad_pcb")
-OK = droute.available() and os.path.exists(EX) and os.path.exists(AP.KICAD_CLI_DEFAULT) and os.path.exists(AP.KIPY_DEFAULT)
+OK = droute.available() and os.path.exists(EX) and os.path.exists(config.kicad_cli())
 
 
 class TestParse(unittest.TestCase):

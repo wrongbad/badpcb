@@ -23,7 +23,7 @@ badpcb.json (every key optional; relative paths are relative to the directory ho
 
 State (sessions, routed passes, extraction cache) lives in `$BADPCB_HOME` or `<project dir>/.badpcb/`, never in the package.
 
-Environment variables: BADPCB_PROJECT, BADPCB_HOME, KIPY (KiCad's python, has pcbnew), KICAD_CLI, KRT_DIR, KRT_PY,
+Environment variables: BADPCB_PROJECT, BADPCB_HOME, KICAD_CLI (DRC / zone refill / fab only; badpcb reads and writes .kicad_pcb itself), KRT_DIR, KRT_PY,
 BADPCB_NO_CACHE, BADPCB_GSCORE_CELL, BADPCB_PROGRESS_S.
 """
 import copy
@@ -35,18 +35,12 @@ import sys
 
 PROJECT_FILE = "badpcb.json"
 
-_KIPY_CANDIDATES = [
-    "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3",   # macOS
-    "/usr/lib/kicad/bin/python3", "/usr/bin/python3",                                                     # Linux (distro python has pcbnew)
-    "C:/Program Files/KiCad/10.0/bin/python.exe", "C:/Program Files/KiCad/9.0/bin/python.exe",           # Windows
-]
 _CLI_CANDIDATES = [
     "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
     "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe", "C:/Program Files/KiCad/9.0/bin/kicad-cli.exe",
 ]
 
 PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-SOURCE_ROOT = os.path.dirname(PACKAGE_DIR)          # the directory that must be on PYTHONPATH for `-m badpcb.<mod>`
 
 
 class Project:
@@ -263,17 +257,6 @@ def set_project(path):
 
 
 # ----------------------------------------------------------------------------- external tools (env, then documented defaults)
-def kipy():
-    """KiCad's python (has pcbnew): $KIPY, else the first existing well-known location."""
-    e = os.environ.get("KIPY")
-    if e:
-        return e
-    for c in _KIPY_CANDIDATES:
-        if os.path.exists(c):
-            return c
-    return _KIPY_CANDIDATES[0]
-
-
 def kicad_cli():
     """kicad-cli: $KICAD_CLI, else on PATH, else a well-known install location."""
     e = os.environ.get("KICAD_CLI")
@@ -288,25 +271,9 @@ def kicad_cli():
     return "kicad-cli"
 
 
-def kipy_available():
-    return os.path.exists(kipy())
-
-
 def kicad_cli_available():
     c = kicad_cli()
     return os.path.exists(c) or shutil.which(c) is not None
-
-
-def kipy_run(args, **kw):
-    """Run `$KIPY -m <module> ...` with the badpcb package importable (works from source or when installed)."""
-    import subprocess
-    env = dict(os.environ)
-    env["PYTHONPATH"] = SOURCE_ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    if current().path:
-        env["BADPCB_PROJECT"] = current().path
-    kw.setdefault("capture_output", True)
-    kw.setdefault("text", True)
-    return subprocess.run([kipy()] + list(args), env=env, **kw)
 
 
 def use(data=None, root=None, path=None):
