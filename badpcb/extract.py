@@ -5,6 +5,7 @@
 All coordinates mm, KiCad convention (+Y down). Layers are names ("F.Cu", "In1.Cu", ...).
 """
 import json
+import os
 import sys
 import time
 
@@ -68,7 +69,11 @@ def extract(path):
 def main(argv):
     t0 = time.time()
     m = extract(argv[1])
-    out = argv[2] if len(argv) > 2 else argv[1].rsplit(".", 1)[0] + ".model.json"
+    if len(argv) > 2:
+        out = argv[2]
+    else:                                      # default: the nested work dir, not beside the board
+        from . import config
+        out = os.path.join(config.current().work_dir("extract", create=True), os.path.basename(argv[1]).rsplit(".", 1)[0] + ".model.json")
     with open(out, "w") as fh:
         json.dump(m, fh, separators=(",", ":"))
     print("%s: %d parts, %d tracks, %d vias, %d zones, %d holes -> %s (%.1fs)" % (

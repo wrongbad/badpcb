@@ -54,8 +54,9 @@ def plan_stubs(board_path, r_max=2.5):
 
 def main(src, dst):
     P, failed = plan_stubs(os.path.abspath(src))
-    pj = dst.rsplit(".", 1)[0] + ".stubs.plan.json"
-    rj = dst.rsplit(".", 1)[0] + ".stubs.rep.json"
+    wd = config.current().work_dir("stubs", os.path.basename(dst).rsplit(".", 1)[0], create=True)
+    pj = os.path.join(wd, "stubs.plan.json")
+    rj = os.path.join(wd, "stubs.rep.json")
     json.dump(P, open(pj, "w"))
     from . import apply as AP
     json.dump(AP.write(P, os.path.abspath(src), os.path.abspath(dst)), open(rj, "w"))

@@ -18,10 +18,13 @@ badpcb.json (every key optional; relative paths are relative to the directory ho
     "audit":  {"decap_bypass_mm": 4.0},           # override ROLES / escape-zone thresholds (defaults: badpcb.audit.DEFAULTS)
     "planes": {"assume": ["GND", "+3V3"]},        # nets to treat as plane nets when the board has no zones yet
     "intent": {...} | "intent.json",              # soft design intent (blocks, near, apart, edge, clear; README "Design intent"); penalties only
-    "krt":    {"dir": "...", "python": "..."}     # KiCadRoutingTools location (else $KRT_DIR / $KRT_PY)
+    "krt":    {"dir": "...", "python": "..."},    # KiCadRoutingTools location (else $KRT_DIR / $KRT_PY)
+    "work_dir": "build/work"                      # where intermediates go (default `<state dir>/work`, i.e. .badpcb/work/<kind>/<id>/)
   }
 
-State (sessions, routed passes, extraction cache) lives in `$BADPCB_HOME` or `<project dir>/.badpcb/`, never in the package.
+State (sessions, work files, extraction cache) lives in `$BADPCB_HOME` or `<project dir>/.badpcb/`, never in the package.
+Intermediates (droute pass boards, strip/repair/fanout copies, apply plans/reports/DRC json, stub plans, logs) go under the nested work directory;
+only the board a command was asked to write (and its .kicad_pro/.kicad_dru, swaps_applied.md) lands where the caller said.
 
 Environment variables: BADPCB_PROJECT, BADPCB_HOME, KICAD_CLI (DRC / zone refill / fab only; badpcb reads and writes .kicad_pcb itself), KRT_DIR, KRT_PY,
 BADPCB_NO_CACHE, BADPCB_GSCORE_CELL, BADPCB_PROGRESS_S.
@@ -72,8 +75,23 @@ class Project:
         return os.path.join(self.home, "sessions")
 
     @property
+    def work_root(self):
+        """Nested work directory for every intermediate artifact (droute pass boards, rip/strip/fanout copies, apply plans and reports,
+        stub plans, DRC json, KRT logs): `"work_dir"` in badpcb.json (relative to the project), else `<state dir>/work`."""
+        w = self.data.get("work_dir")
+        return self.rel(w) if w else os.path.join(self.home, "work")
+
+    def work_dir(self, *parts, create=False):
+        """`<work root>/<parts...>`, e.g. work_dir("droute", "s1"), work_dir("apply", "out"), work_dir("drc")."""
+        d = os.path.join(self.work_root, *parts)
+        if create:
+            os.makedirs(d, exist_ok=True)
+        return d
+
+    @property
     def routes_dir(self):
-        return os.path.join(self.home, "routes")
+        """droute pass chains: `<work root>/droute/<session or board name>/passN.kicad_pcb`."""
+        return self.work_dir("droute")
 
     @property
     def cache_dir(self):

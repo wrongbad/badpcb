@@ -3,9 +3,9 @@
     python3 -m badpcb droute <session|board.kicad_pcb> [--nets N ...] [--component R ...] [--region R8|x0,y0,x1,y1]
                          [--preview] [--time S] [--out board] [--fresh] [--measure] [--extra "raw KRT route.py args"]
 
-* a session is first written to a board (badpcb apply, cached in <badpcb home>/routes/<session>/applied.kicad_pcb);
-  every pass then continues from <badpcb home>/routes/<session>/current.kicad_pcb, so small scoped passes chain naturally;
-* a plain board is routed from itself, result written to --out (default <badpcb home>/routes/<name>/passN.kicad_pcb);
+* a session is first written to a board (badpcb apply, cached in <work dir>/droute/<session>/applied.kicad_pcb);
+  every pass then continues from <work dir>/droute/<session>/current.kicad_pcb, so small scoped passes chain naturally;
+* a plain board is routed from itself, result written to --out (default <work dir>/droute/<name>/passN.kicad_pcb);
 * the scope (nets / component / region) is handed to KRT's route.py (--nets / --component), signal layers only;
 * KRT's log is parsed for failed nets and the nets that blocked them, the written board is re-extracted and
   measured with badpcb (unrouted conns, vias, length) and kicad-cli DRC; every still-unrouted connection of the scope
@@ -57,8 +57,7 @@ def measure(board_path, with_drc=True, pro=None):
            "unrouted_net_names": unrouted_nets, "plane_stub_pads": len(c.rn.stubs), "plane_nets_open": plane_open,
            "tracks": len(b.tracks), "vias": len(b.vias), "length_mm": round(length, 1)}
     if with_drc:
-        base = os.path.join(routes_dir(), "drc")
-        os.makedirs(base, exist_ok=True)
+        base = config.current().work_dir("drc", create=True)
         d = AP.drc(board_path, os.path.join(base, os.path.basename(board_path) + ".json"), pro=pro or AP.default_rules_pro(board_path))
         s = AP.drc_summary(d)
         un = {}

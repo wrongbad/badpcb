@@ -479,8 +479,9 @@ def run(session, out, src=None, verify=True, report_path=None):
     cfg = st.world.cfg
     src = os.path.abspath(src or st.board_path)
     out = os.path.abspath(out)
-    pj = out.rsplit(".", 1)[0] + ".plan.json"
-    rj = out.rsplit(".", 1)[0] + ".apply_report.json"
+    wd = config.current().work_dir("apply", os.path.basename(out).rsplit(".", 1)[0], create=True)   # intermediates stay out of the board folder
+    pj = os.path.join(wd, "plan.json")
+    rj = os.path.join(wd, "apply_report.json")
     json.dump(P, open(pj, "w"), indent=1)
     rep = write(P, src, out)
     json.dump(rep, open(rj, "w"), indent=1)
@@ -510,8 +511,8 @@ def run(session, out, src=None, verify=True, report_path=None):
         res["metrics_session"], res["metrics_written"] = m_s, m_o
         L.append("  VERIFY session  METRICS " + state.fmt_metrics(m_s))
         L.append("  VERIFY written  METRICS " + state.fmt_metrics(m_o))
-        d0 = drc(src, out.rsplit(".", 1)[0] + ".drc_in.json")
-        d1 = drc(out, out.rsplit(".", 1)[0] + ".drc.json")
+        d0 = drc(src, os.path.join(wd, "drc_in.json"))
+        d1 = drc(out, os.path.join(wd, "drc.json"))
         new = drc_new(d0, d1)
         res["drc_in"], res["drc_out"], res["drc_new"] = drc_summary(d0), drc_summary(d1), len(new)
         L.append("  DRC input  %s" % json.dumps(res["drc_in"]))

@@ -62,8 +62,14 @@ class TestProject(unittest.TestCase):
         P = config.use({}, root=self.tmp)
         os.environ["BADPCB_HOME"] = os.path.join(self.tmp, "elsewhere")
         self.assertEqual(P.sessions_dir, os.path.join(self.tmp, "elsewhere", "sessions"))
-        self.assertEqual(P.routes_dir, os.path.join(self.tmp, "elsewhere", "routes"))
+        self.assertEqual(P.routes_dir, os.path.join(self.tmp, "elsewhere", "work", "droute"))
+        self.assertEqual(P.work_dir("apply", "x"), os.path.join(self.tmp, "elsewhere", "work", "apply", "x"))
         self.assertEqual(P.cache_dir, os.path.join(self.tmp, "elsewhere", "cache"))
+
+    def test_work_dir_configurable(self):
+        P = config.use({"work_dir": "build/w"}, root=self.tmp)
+        self.assertEqual(P.work_root, os.path.join(self.tmp, "build", "w"))
+        self.assertEqual(P.routes_dir, os.path.join(self.tmp, "build", "w", "droute"))
 
     def test_env_beats_config_for_tools(self):
         P = config.use({"krt": {"dir": "tools/krt", "python": "tools/py"}}, root=self.tmp)
