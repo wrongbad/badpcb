@@ -567,6 +567,9 @@ def main(argv=None):
     x.add_argument("refs", nargs="?", default="")
     x.add_argument("--edge", type=float, default=1.5)
     x.add_argument("--minimal", action="store_true", help="move only the parts that block a signal stub of the fan + their filter caps")
+    x = sub.add_parser("styles", help="resolved net style per net (badpcb.json net_styles, KiCad netclasses): badpcb styles BOARD [--json]")
+    x.add_argument("board")
+    x.add_argument("--json", action="store_true")
     x = sub.add_parser("floorplan", help="step-2 view: blocks, fill, block nets/crossings, connectors, what faces each fine-pitch IC side, long links: badpcb floorplan <board|session> [--json] [--depth 8]")
     x.add_argument("target", help=".kicad_pcb / model.json path or a session name")
     x.add_argument("--json", action="store_true")
@@ -655,6 +658,9 @@ def main(argv=None):
             return _dr.main_args(a)
         if a.cmd == "report":
             return report_main(a)
+        if a.cmd == "styles":
+            from . import styles as _st
+            return _st.main_args(a)
         if a.cmd == "plan" or (a.cmd == "audit" and a.joint is not None):
             from . import joint as _jt
             return _jt.main_args(a.target, a.refs if a.cmd == "plan" else a.joint, a.edge, a.minimal)

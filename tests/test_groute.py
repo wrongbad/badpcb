@@ -120,3 +120,63 @@ class Hints(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NetStyleCosts(unittest.TestCase):
+    """Per-net costs from net styles; no styles = the global-cost router, bit for bit."""
+
+    @staticmethod
+    def pts(r):
+        return {c["net"]: [tuple(p) for p in c["points"]] for c in r.to_json()["connections"]}
+
+    def swap_board(self):
+        return board(singles([("A1", (5, 10), "A"), ("A2", (55, 10), "A"), ("B1", (30, 2), "B"), ("B2", (30, 18), "B")]), size=(60, 20))
+
+    def test_no_styles_is_unchanged(self):
+        from badpcb import styles as ST
+        b = self.swap_board()
+        base = self.pts(run(b, styles=None))
+        self.assertEqual(self.pts(run(b, styles={})), base)
+        # a style that matches no net of the board resolves to {} and changes nothing either
+        r, _ = ST.resolve(b.nets, ST.parse({"x": {"match": ["ZZZ*"], "via_penalty": 99, "detour_max": 1.1, "avoid": ["A"]}}))
+        self.assertEqual(r, {})
+        self.assertEqual(self.pts(run(b, styles=r)), base)
+        gr = groute.GRouter(b, ratsnest.build(b), styles={})
+        self.assertEqual((gr.net_viapen, gr.net_lenw, gr.net_avoid), ({}, {}, {}))
+
+    def test_default_run_reads_badpcb_json_and_is_unchanged_without_styles(self):
+        from badpcb import config
+        config.use({})
+        b = self.swap_board()
+        self.assertEqual(self.pts(run(b)), self.pts(run(b, styles=None)))
+
+    def test_via_penalty_moves_the_vias_to_the_other_net(self):
+        from badpcb import styles as ST
+        b = self.swap_board()
+        nv = lambda r: {c["net"]: c["n_vias"] for c in r.to_json()["connections"]}
+        self.assertEqual(nv(run(b, styles=None)), {"A": 0, "B": 2})
+        r, _ = ST.resolve(b.nets, ST.parse({"x": {"match": ["B"], "via_penalty": 200}}))
+        self.assertEqual(nv(run(b, styles=r))["B"], 0)            # B now refuses to hop; A pays the vias
+        self.assertEqual(nv(run(b, styles=r))["A"], 2)
+
+    def test_avoid_keeps_the_net_away_from_the_other(self):
+        from badpcb import styles as ST
+        b = board(singles([("A1", (5, 20), "A"), ("A2", (55, 20), "A"), ("B1", (5, 21), "B"), ("B2", (55, 21), "B")]), size=(60, 40))
+
+        def gap(r):
+            p = self.pts(r)
+            return min(abs(a[1] - c[1]) for a in p["A"] for c in p["B"] if 15 < a[0] < 45 and abs(a[0] - c[0]) < 1 and a[2] == c[2])
+        self.assertEqual(gap(run(b, styles=None)), 1.0)
+        r, _ = ST.resolve(b.nets, ST.parse({"x": {"match": ["B"], "avoid": ["A"]}}))
+        self.assertGreaterEqual(gap(run(b, styles=r)), 2.0)
+        gr = groute.GRouter(b, ratsnest.build(b), styles=r)
+        self.assertIn(gr.nid["A"], gr.net_avoid[gr.nid["B"]])
+        self.assertIn(gr.nid["B"], gr.net_avoid[gr.nid["A"]])     # keeping apart is mutual
+
+    def test_detour_max_weights_length(self):
+        from badpcb import styles as ST
+        b = self.swap_board()
+        r, _ = ST.resolve(b.nets, ST.parse({"x": {"match": ["A"], "detour_max": 1.05}, "y": {"match": ["B"], "detour_max": 2.0}}))
+        gr = groute.GRouter(b, ratsnest.build(b), styles=r)
+        self.assertGreater(gr.net_lenw[gr.nid["A"]], 1.0)
+        self.assertNotIn(gr.nid["B"], gr.net_lenw)                # a loose budget changes nothing

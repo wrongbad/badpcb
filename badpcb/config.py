@@ -11,13 +11,15 @@ badpcb.json (every key optional; relative paths are relative to the directory ho
     "rules":  {"project": "my_board.kicad_pro"},  # .kicad_pro (+ sibling .kicad_dru) DRC is graded against (default: the board's own)
     "mcu":    "U1",                               # main IC of interest (pin-swap groups, plan/audit default, grid choice)
     "fine_pitch_parts": ["U1"],                   # parts whose fan-out matters; default: auto (pad pitch < 0.65 mm, >= 16 pads)
-    "swaps":  "swaps.json" | {inline dict},       # swap groups: {"mcu", "pin_names", "groups":[...]}  (see examples/key_board)
+    "swaps":  "swaps.json" | {inline dict},       # swap groups: {"mcu", "pin_names", "groups":[...]}  (see examples/pcb_v2)
     "locks":  {"classes": {"trunk": {"file": "trunks.json", "protect": true, "trim": true},   # copper lock classes (none by default)
                            "ref":   {"file": "ref.json", "key": "copied"}},                   # plain class; "name": "file[:key]" is shorthand
                "trim":    {"nets": "^SIG\\\\d+$", "key_parts": "^U1\\\\d\\\\d$", "start_part": "U1", "band_depth": 5.0}},
     "audit":  {"decap_bypass_mm": 4.0},           # override ROLES / escape-zone thresholds (defaults: badpcb.audit.DEFAULTS)
     "planes": {"assume": ["GND", "+3V3"],         # nets to treat as plane nets when the board has no zones yet
                "min_coverage": 0.30},             # a layer is a plane layer when netted zones cover > this fraction of the board outline
+    "net_styles": {"usb": {"match": ["USB_D*"], "pair": "USB_DP/USB_DN", "via_penalty": 8, "priority": true}},   # soft per-net preferences (badpcb/styles.py)
+    "lint":   {"weights": {"via": 2.0}, "bad_score": 8},   # route-lint weights/thresholds (badpcb/lint.py DEFAULTS)
     "intent": {...} | "intent.json",              # soft design intent (blocks, near, apart, edge, clear; README "Design intent"); penalties only
     "krt":    {"dir": "...", "python": "..."},    # KiCadRoutingTools location (else $KRT_DIR / $KRT_PY)
     "work_dir": "build/work"                      # where intermediates go (default `<state dir>/work`, i.e. .badpcb/work/<kind>/<id>/)
@@ -199,6 +201,20 @@ class Project:
         0 = any netted zone makes a plane layer, the old behaviour)."""
         v = (self.data.get("planes") or {}).get("min_coverage")
         return 0.30 if v is None else float(v)
+
+    def net_styles(self):
+        """Validated `net_styles` (badpcb/styles.py): {style name: normalised dict}; {} when none are declared."""
+        if getattr(self, "_net_styles", None) is None:
+            from . import styles
+            try:
+                self._net_styles = styles.parse(self.data.get("net_styles"))
+            except styles.StyleError as e:
+                sys.exit("badpcb: bad \"net_styles\" in badpcb.json: %s" % e)
+        return copy.deepcopy(self._net_styles)
+
+    def lint_cfg(self):
+        """Optional "lint" block: overrides for badpcb.lint.DEFAULTS (weights, thresholds)."""
+        return dict(self.data.get("lint") or {})
 
     def plane_hints(self):
         return list((self.data.get("planes") or {}).get("assume") or [])

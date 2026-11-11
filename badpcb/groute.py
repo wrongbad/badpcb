@@ -153,7 +153,7 @@ def _glob_nets(pat, nets):
 # ----------------------------------------------------------------------------------------- router
 class GRouter:
     def __init__(self, board, rn, conns=None, cell=1.0, res=0.1, via_cost=6.0, esc_cap=2, hints=(), names=None,
-                 verbose=False, hist_inc=0.6, pf0=0.5, pf_grow=1.5, bend=0.12):
+                 verbose=False, hist_inc=0.6, pf0=0.5, pf_grow=1.5, bend=0.12, styles=None):
         self.t0 = time.time()
         self.b = board
         self.rn = rn
@@ -173,6 +173,7 @@ class GRouter:
         self.LN = self.L * self.N
         self.nid = {n: i + 1 for i, n in enumerate(board.nets)}
         self.nname = {v: k for k, v in self.nid.items()}
+        self._init_styles(styles)
         rl = board.rules
         self.rl = rl
         self.conns = list(conns if conns is not None else rn.conns)
@@ -188,6 +189,43 @@ class GRouter:
         self._relax_escapes()
         self._init_state()
         self._apply_hints()
+
+    # --- per-net costs from net styles (badpcb/styles.py): empty when no styles -> identical to the global-cost router ----------
+    AVOID_COST = 0.8          # extra cost of a cell next to a net to avoid, in cells of path (1.0 = one more cell)
+
+    def _init_styles(self, styles):
+        self.net_viapen, self.net_lenw, self.net_avoid = {}, {}, {}
+        for n, st in (styles or {}).items():
+            i = self.nid.get(n)
+            if i is None:
+                continue
+            if st.via_penalty:
+                self.net_viapen[i] = float(st.via_penalty)
+            if st.detour_max:
+                # tight detour budget -> path length counts more against congestion/history terms (1.5 = default budget, no change)
+                w = 1.0 + 2.0 * max(0.0, 1.5 - st.detour_max) / 1.5
+                if w != 1.0:
+                    self.net_lenw[i] = w
+            for pat in st.avoid:
+                for m in self.b.nets:
+                    if m != n and (m == pat or fnmatch.fnmatchcase(m, pat)) and m in self.nid:
+                        self.net_avoid.setdefault(i, set()).add(self.nid[m])
+                        self.net_avoid.setdefault(self.nid[m], set()).add(i)      # keeping apart is mutual
+
+    def _avoid_near(self, N_id):
+        """Node ids (layer*N + cell) within one cell of the copper of the nets N_id avoids (None when it avoids nothing)."""
+        av = self.net_avoid.get(N_id)
+        if not av:
+            return None
+        near, nx, LN2 = set(), self.nx, 2 * self.LN
+        for o in av:
+            for r in self.netres.get(o, ()):
+                if r < LN2:
+                    u = r // 2
+                    v = u + (1 if r % 2 == 0 else nx)
+                    for w in (u, v):
+                        near.update((w, w - 1, w + 1, w - nx, w + nx))
+        return near
 
     def _log(self, msg):
         if self.verbose:
@@ -764,7 +802,9 @@ class GRouter:
         sV, sH, sT, nsV, nsH, nsT, xhist = self.sV, self.sH, self.sT, self.nsV[N_id], self.nsH[N_id], self.nsT[N_id], self.xhist
         frozen = self.frozen
         bendc = self.bend_c * s
-        viac = self.via_cost
+        viac = self.via_cost + self.net_viapen.get(N_id, 0.0) if self.net_viapen else self.via_cost
+        lenw = self.net_lenw.get(N_id, 1.0) if self.net_lenw else 1.0
+        near = self._avoid_near(N_id) if self.net_avoid else None
         hmin = getattr(self, "hmin", 1.0)
         if lm:
             hmin = min(hmin, min(lm))
@@ -781,13 +821,13 @@ class GRouter:
             m = margin_cells if attempt == 0 else max(nx, ny)
             xlo, xhi, ylo, yhi = max(0, sx0 - m), min(nx - 1, sx1 + m), max(0, sy0 - m), min(ny - 1, sy1 + m)
             res = self._astar(N_id, src, dst, xlo, xhi, ylo, yhi, gx0, gx1, gy0, gy1, legal, block, cap, occ, hist, users,
-                              mine, ovr, lm, disc, pf, sV, sH, sT, nsV, nsH, nsT, xhist, frozen, bendc, viac, hmin)
+                              mine, ovr, lm, disc, pf, sV, sH, sT, nsV, nsH, nsT, xhist, frozen, bendc, viac, hmin, lenw, near)
             if res or (xlo == 0 and xhi == nx - 1 and ylo == 0 and yhi == ny - 1):
                 return res
         return None
 
     def _astar(self, N_id, src, dst, xlo, xhi, ylo, yhi, gx0, gx1, gy0, gy1, legal, block, cap, occ, hist, users,
-               mine, ovr, lm, disc, pf, sV, sH, sT, nsV, nsH, nsT, xhist, frozen, bendc, viac, hmin):
+               mine, ovr, lm, disc, pf, sV, sH, sT, nsV, nsH, nsT, xhist, frozen, bendc, viac, hmin, lenw=1.0, near=None):
         nx, N, LN, L, s = self.nx, self.N, self.LN, self.L, self.s
         heappush, heappop = heapq.heappush, heapq.heappop
         best = {}
@@ -820,7 +860,7 @@ class GRouter:
                 break
             l, rem = divmod(u, N)
             y, x = divmod(rem, nx)
-            base_l = s * lmv[l]
+            base_l = s * lmv[l] * lenw if lenw != 1.0 else s * lmv[l]
             for dx, dy, ax in dirs:
                 xx, yy = x + dx, y + dy
                 if xx < xlo or xx > xhi or yy < ylo or yy > yhi:
@@ -858,6 +898,8 @@ class GRouter:
                         if legal:
                             continue
                         cost += (s + xhist[u]) * pf * xo
+                if near and not legal and v in near:
+                    cost += self.AVOID_COST * s
                 g2 = g + cost
                 k2 = v * 3 + ax
                 if g2 < best.get(k2, INF):
@@ -1829,6 +1871,9 @@ def select_conns(board, rn, names, nets=None, region=None):
 
 def run(board, rn=None, cell=1.0, iters=30, tlimit=30.0, hints=(), nets=None, region=None, via_cost=6.0, esc_cap=2,
         res=0.1, verbose=False, names=None, stall=8, **kw):
+    if kw.setdefault("styles", "auto") == "auto":          # net styles of badpcb.json (none configured -> {} -> exactly the global costs)
+        from . import styles as _st
+        kw["styles"] = _st.for_board(board)
     rn = rn or ratsnest.build(board)
     names = names or Names(board, rn)
     conns = select_conns(board, rn, names, nets, region)
