@@ -150,11 +150,16 @@ class TestWorkDir(unittest.TestCase):
         self._home = os.environ.pop("BADPCB_HOME", None)
         self._sd = state.SESSION_DIR
         state.SESSION_DIR = None
+        self._proj_env = os.environ.get("BADPCB_PROJECT")
+        os.environ["BADPCB_PROJECT"] = self.tmp                  # cli.main() re-reads the project: keep state out of the checkout
         config.load(self.tmp)
         self.board = os.path.join(self.tmp, "mini.kicad_pcb")
         shutil.copyfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "kicad10_mini.kicad_pcb"), self.board)
 
     def tearDown(self):
+        os.environ.pop("BADPCB_PROJECT", None)
+        if self._proj_env:
+            os.environ["BADPCB_PROJECT"] = self._proj_env
         if self._home is not None:
             os.environ["BADPCB_HOME"] = self._home
         state.SESSION_DIR = self._sd

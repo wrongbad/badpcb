@@ -11,6 +11,7 @@ krt-venv/
 *.kicad_pcb
 *.kicad_pcb-bak
 *.kicad_prl
+!tests/fixtures/*.kicad_pcb
 *-backups/
 fp-info-cache
 sessions/
