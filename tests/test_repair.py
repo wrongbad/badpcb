@@ -50,6 +50,25 @@ class Plan(unittest.TestCase):
         self.assertNotIn("near_free", p["ids"])
 
 
+class ScopeReport(unittest.TestCase):
+    def test_widening_beyond_the_region_is_logged(self):
+        b = Plan().board()
+        rn = ratsnest.build(b, [])
+        p = repair.plan(b, [c for c in rn.conns if c.net == "A"], radius=4.0)        # A runs R1 (10,10) -> R2 (60,10); B's copper is ripped too
+        L = repair.scope_report(p, {"A"}, (0, 0, 20, 20), 4.0)                      # request: a region around R1 only
+        txt = "\n".join(L)
+        self.assertIn("WIDENED", txt)
+        self.assertIn("outside the requested region", txt)                         # R2 end at x=60
+        self.assertIn("+1 net(s) beyond the request: B", txt)
+        self.assertIn("bystanders", txt)
+
+    def test_nothing_to_report_inside_the_request(self):
+        b = Plan().board()
+        rn = ratsnest.build(b, [])
+        p = repair.plan(b, [c for c in rn.conns if c.net == "A"], radius=4.0)
+        self.assertEqual(repair.scope_report(p, {"A", "B"}, (0, 0, 100, 100), 4.0), [])
+
+
 class Ladder(unittest.TestCase):
     def test_escalation(self):
         h = [{"mode": "plain", "names": ["ADC2"]}, {"mode": "plain", "names": ["ADC4"]}, {"mode": "plain", "names": ["ADC7"]}]

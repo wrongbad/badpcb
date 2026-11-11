@@ -56,7 +56,32 @@ def plan(board, conns, radius=4.0, scope=None, plane_nets=()):
                 nets.add(v.net)
                 nv += 1
     return {"ids": sorted(ids), "nets": sorted(nets | failing), "tracks": nt, "vias": nv, "locked": dict(locked),
-            "ends": len(ends), "failing": sorted(failing), "ripped_nets": sorted(nets)}
+            "ends": len(ends), "failing": sorted(failing), "ripped_nets": sorted(nets), "end_pts": [list(e) for e in ends]}
+
+
+def scope_report(p, requested, bb=None, radius=4.0):
+    """Lines telling what scope --repair chose when it differs from the request: the requested nets/region versus the nets it will route
+    (open connections of those nets reach far ends outside the region; ripped bystanders join the scope). [] when it stays inside the request."""
+    requested = set(requested or ())
+    final = set(p["nets"])
+    extra = sorted(final - requested)
+    out_pts = [e for e in p.get("end_pts", []) if bb is not None and not (bb[0] <= e[0] <= bb[2] and bb[1] <= e[1] <= bb[3])]
+    L = []
+    if not (extra or out_pts):
+        return L
+    why = []
+    if out_pts:
+        xs, ys = [e[0] for e in out_pts], [e[1] for e in out_pts]
+        why.append("%d of %d open-connection end(s) lie outside the requested region (x %.0f..%.0f, y %.0f..%.0f)" % (
+            len(out_pts), len(p.get("end_pts", [])), min(xs), max(xs), min(ys), max(ys)))
+    if extra:
+        bystanders = sorted(set(extra) & set(p["ripped_nets"]) - set(p["failing"]))
+        why.append("+%d net(s) beyond the request: %s%s" % (len(extra), " ".join(extra[:14]), " ..." if len(extra) > 14 else ""))
+        if bystanders:
+            why.append("%d of them are bystanders whose copper lies within %.1f mm of an open end" % (len(bystanders), radius))
+    L.append("repair scope WIDENED: requested %d net(s)%s -> routing %d net(s). %s. Narrow it with --radius or --nets if that is not what you want." % (
+        len(requested), (" in region %.1f,%.1f..%.1f,%.1f" % tuple(bb)) if bb else "", len(final), "; ".join(why)))
+    return L
 
 
 def describe(p, radius):

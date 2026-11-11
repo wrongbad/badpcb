@@ -349,6 +349,13 @@ def main_args(a):
         rpl = RP.plan(board, ctx.rn.conns, a.radius, scope, board.plane_nets())
         print("  " + RP.describe(rpl, a.radius).replace("\n", "\n  "))
         if rpl["nets"]:
+            req = scope if scope is not None else set()
+            if scope is not None or bb is not None:                      # explicit request: say how far the repair went beyond it
+                for ln_ in RP.scope_report(rpl, req, bb, a.radius):
+                    print("  " + ln_)
+            elif not a.nets:
+                print("  repair scope: no --nets/--region given, so all %d net(s) with open connections plus ripped bystanders (%d net(s) in all)" % (
+                    len(rpl["failing"]), len(rpl["nets"])))
             nets = rpl["nets"]
         if rpl["ids"] and not a.preview:
             idf = os.path.join(pd, "pass%d.repair.ids.json" % k)
