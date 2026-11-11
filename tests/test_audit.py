@@ -114,6 +114,45 @@ class Plane(unittest.TestCase):
         self.assertEqual(dets(audit.run(st, ["PLANE"]), "PLANE"), [])
 
 
+class PlaneExtent(unittest.TestCase):
+    """Pad-over-plane is judged by the pad's copper extent and where its stub + via can land, against zone outlines."""
+    LAYERS = ("F.Cu", "In1.Cu", "In2.Cu", "B.Cu")
+
+    def zones(self):
+        return [{"layers": ["In2.Cu"], "net": "+3V3", "priority": 0, "polys": [{"outer": [[0, 0], [50, 0], [50, 50], [0, 50]], "holes": []}]},
+                {"layers": ["In2.Cu"], "net": "+3V3A", "priority": 0, "polys": [{"outer": [[50.5, 0], [100, 0], [100, 50], [50.5, 50]], "holes": []}]},
+                synth.zone("GND", "In1.Cu")]
+
+    def board(self, x, size=(0.15, 0.6), x60=None, net60="+3V3", **kw):
+        """U1.59 (+3V3A) at x, U1.60 (+3V3) 0.4 mm to its left: no zone boundary can separate the two pads."""
+        parts = [part("U1", [P("59", (x, 20), "+3V3A", size=size), P("60", (x - 0.4 if x60 is None else x60, 20), net60, size=(0.15, 0.6))], (x, 20), half=(0.6, 0.6))]
+        return state.State("t_audit", "synthetic", synth.board(parts, zones=self.zones(), layers=self.LAYERS, **kw), [], 21.0)
+
+    def test_pad_centre_in_other_plane_but_stub_via_lands_in_right_zone(self):
+        st = self.board(49.9)                      # pad centre 0.6 mm inside +3V3, +3V3A zone starts at 50.5
+        self.assertEqual(dets(audit.run(st, ["PLANE"]), "PLANE"), [])
+
+    def test_pad_copper_overlapping_its_zone_is_served(self):
+        st = self.board(50.2, size=(0.7, 0.6), x60=49.4)     # extent 49.85..50.55 reaches into the +3V3A outline (starts at 50.5)
+        self.assertEqual(dets(audit.run(st, ["PLANE"]), "PLANE"), [])
+
+    def test_existing_stub_and_via_in_the_right_zone_count(self):
+        st = self.board(49.9, vias=[synth.via((51.5, 20), "+3V3A")], tracks=[synth.track((49.9, 20), (51.5, 20), "+3V3A", locked=False)])
+        self.assertEqual([f for f in dets(audit.run(st, ["PLANE"]), "PLANE") if "U1.59" in f.handles["pads"]], [])
+
+    def test_zone_outline_is_enough_unfilled_and_without_vias(self):
+        """The model only knows outlines (never fills): a zone with no fill and no via in it is a plane for the audit."""
+        st = self.board(75, net60="+3V3A")
+        self.assertEqual(st.world.board.plane_nets(), ["+3V3", "+3V3A", "GND"])
+        self.assertEqual(dets(audit.run(st, ["PLANE"]), "PLANE"), [])
+
+    def test_no_reach_is_still_an_error(self):
+        st = self.board(20)                        # 30 mm from the +3V3A zone: no stub can get there
+        f = dets(audit.run(st, ["PLANE"]), "PLANE")
+        self.assertEqual(len(f), 1)
+        self.assertEqual(f[0].sev, "ERR")
+
+
 class Bowtie(unittest.TestCase):
     def pair(self):
         a = part("X1", [P("1", (10, 10), "n1"), P("2", (10, 12), "n2")], (10, 11), half=(3, 3))

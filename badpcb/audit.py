@@ -774,7 +774,7 @@ def detect_plane(ac):
             if pd.id in unserved and not _via_spot(ac, pd, net):
                 boxed.append(pd)
             continue
-        if pd.through and net in {d.net for d in b.parts[pd.ref].pads if d.net and d is not pd} and False:
+        if _pad_served(ac, pd, net, unserved):                 # copper extent / existing stub+via / a legal stub+via spot in the right zone
             continue
         mine = {l for z in b.zones if z.net == net for l in z.layers}
         under = sorted({z.net for z in b.zones if z.net != net and set(z.layers) & mine and any(
@@ -843,6 +843,44 @@ def detect_plane(ac):
         f.advice.append("nudge the part(s) off foreign copper or `unlock`/rip the blocking track, then `badpcb suggest S planes`")
         out.append(f)
     return out
+
+
+def _pad_corners(pd):
+    """Sample points of a pad's copper extent: centre, corners and edge midpoints of its (rotated) bounding rectangle."""
+    c, s = math.cos(math.radians(pd.rot)), math.sin(math.radians(pd.rot))
+    hw, hh = pd.size[0] / 2.0, pd.size[1] / 2.0
+    return [(pd.pos[0] + dx * c - dy * s, pd.pos[1] + dx * s + dy * c)
+            for dx in (-hw, 0.0, hw) for dy in (-hh, 0.0, hh)]
+
+
+def _pad_touches_zone(b, pd, net):
+    """The pad's copper overlaps an outline of a `net` zone (sampled extent, or a zone vertex inside the pad rectangle)."""
+    if any(A._in_zone(b, net, q) for q in _pad_corners(pd)):
+        return True
+    c, s = math.cos(math.radians(pd.rot)), math.sin(math.radians(pd.rot))
+    hw, hh = pd.size[0] / 2.0, pd.size[1] / 2.0
+    for z in b.zones:
+        if z.net == net:
+            for zp in z.polys:
+                for v in zp["outer"]:
+                    dx, dy = v[0] - pd.pos[0], v[1] - pd.pos[1]
+                    if abs(dx * c + dy * s) <= hw and abs(-dx * s + dy * c) <= hh:
+                        return True
+    return False
+
+
+def _pad_served(ac, pd, net, unserved):
+    """A supply pad whose centre lies outside its own plane's outline is still served when
+    (a) its copper extent touches a zone of `net` (pads 0.4 mm apart cannot be split by a zone boundary, the boundary may run through them),
+    (b) its island already has copper (stub + via) reaching that zone, or
+    (c) a legal stub + via spot inside the right zone exists within PLANE_VIA_RADIUS of the pad (the stub crosses over the other plane).
+    Zone OUTLINES are used throughout (an unfilled zone, or one without any via yet, counts)."""
+    b = ac.b
+    if _pad_touches_zone(b, pd, net):
+        return True
+    if pd.id not in unserved:
+        return True
+    return _via_spot(ac, pd, net) is not None
 
 
 def _via_spot(ac, pd, net, radius=PLANE_VIA_RADIUS):
