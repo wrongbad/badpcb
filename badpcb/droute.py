@@ -121,7 +121,38 @@ def progress_line(log_path):
     return (last[-1].strip() if last else (tail[-1].strip() if tail else "starting"))[:110]
 
 
-def run_krt(src, dst, nets, comps, rules, time_cap, preview, extra, json_out, log_path, grid=None):
+AVOID_GAP_MM = 1.0           # keep-away band handed to KRT for a style's `avoid`
+KRT_VIA_COST = 75            # KRT's default --via-cost (0.1 mm grid steps = 7.5 mm of path); a style's via_penalty (mm) adds 10 per mm
+PRIORITY_TURN_COST = 1500    # KRT default 1000: priority nets pay more per direction change
+
+
+def style_krt_args(nets, resolved, priority=False):
+    """KRT flags for a pass whose scope is `nets` -> (args, notes). KRT has ONE via cost per run (no per-net option), so a normal pass raises it
+    only when every net of the scope carries a via_penalty (the weakest one applies); the priority pass uses the strictest. `avoid` becomes
+    `--keep-away` bands (soft, edge to edge on the same layer)."""
+    args, notes = [], []
+    st = [resolved.get(n) for n in nets]
+    pens = [s.via_penalty if s else 0.0 for s in st]
+    pen = (max(pens) if priority else min(pens)) if pens else 0.0
+    if pen > 0:
+        args += ["--via-cost", str(int(round(KRT_VIA_COST + 10 * pen)))]
+        notes.append("via cost %d (style via_penalty %.1f, %s of the scope)" % (KRT_VIA_COST + 10 * pen, pen, "strictest" if priority else "weakest"))
+    if priority:
+        args += ["--turn-cost", str(PRIORITY_TURN_COST)]
+        notes.append("turn cost %d" % PRIORITY_TURN_COST)
+    groups = {}
+    for n, s in zip(nets, st):
+        if s and s.avoid and not any(c in n for c in ",: "):
+            groups.setdefault(tuple(sorted(s.avoid)), []).append(n)
+    for av, ns in sorted(groups.items()):
+        av = [a for a in av if not any(c in a for c in ": ")]
+        if av:
+            args += ["--keep-away", "%s:%s:%g" % (",".join(_glob(x) for x in ns), ",".join(_glob(a) for a in av), AVOID_GAP_MM)]
+            notes.append("keep-away %s from %s (%g mm)" % ("+".join(ns[:3]) + ("+.." if len(ns) > 3 else ""), ",".join(av), AVOID_GAP_MM))
+    return args, notes
+
+
+def run_krt(src, dst, nets, comps, rules, time_cap, preview, extra, json_out, log_path, grid=None, extra_args=None, env=None):
     cmd = [krt_py(), os.path.join(krt_dir(), "py_router", "route.py"), src, dst]
     if nets:
         cmd += ["--nets"] + [_glob(n) for n in nets]
@@ -134,11 +165,14 @@ def run_krt(src, dst, nets, comps, rules, time_cap, preview, extra, json_out, lo
         cmd += ["--grid-step", str(grid)]
     if preview:
         cmd += ["--preview"]
+    if extra_args:
+        cmd += list(extra_args)
     if extra:
         cmd += extra.split()
     t0 = time.time()
     with open(log_path, "w") as lf:
-        p = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, cwd=krt_dir(), start_new_session=True)
+        p = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, cwd=krt_dir(), start_new_session=True,
+                             env=dict(os.environ, **env) if env else None)
         timed_out = False
         every = float(os.environ.get("BADPCB_PROGRESS_S", "30"))
         while True:
@@ -269,6 +303,109 @@ def explain_open(ctx, scope_nets, parsed, limit=14):
     return L
 
 
+# --------------------------------------------------------------------------- polish (accept/reject logic: polish.py)
+def route_layers(board):
+    """Layers KRT may route on: the non-plane layers; on a board whose outer layers carry a GND pour (so every layer counts as a plane layer)
+    the layers that already carry signal copper, else the outer pair."""
+    sig = board.signal_layers()
+    if sig:
+        return sig
+    plane = set(board.plane_nets())
+    used = [l for l in board.layers if any(t.layer == l and t.net and t.net not in plane for t in board.tracks)]
+    return used or [board.layers[0], board.layers[-1]]
+
+
+def _copper_sig(board, skip):
+    """Copper of every net outside `skip`, rounded: what `frozen` compares before/after a polish reroute."""
+    r = lambda p: (round(p[0], 3), round(p[1], 3))
+    sk = set(skip)
+    tr = {(t.net, t.layer, min(r(t.a), r(t.b)), max(r(t.a), r(t.b)), round(t.w, 3)) for t in board.tracks if t.net not in sk}
+    vi = {(v.net, r(v.pos), round(v.dia, 3)) for v in board.vias if v.net not in sk}
+    return tr, vi
+
+
+def polish_env(a, pd):
+    """The real hooks of polish.Env: lint on the extracted board, badpcb+DRC measure, KRT reroute of a stripped group."""
+    from . import cli, feas, lint as LT, polish as PO, ratsnest, strip_nets, styles as ST
+    pro = getattr(a, "rules_pro", None)
+    cache = {}
+
+    def load(path):
+        key = (path, os.path.getmtime(path))
+        if key not in cache:
+            cache.clear()
+            cache[key] = cli.load_board(path)
+        return cache[key]
+
+    def lint(path):
+        b = load(path)
+        return LT.lint_board(b, rn=ratsnest.build(b))
+
+    def measure(path, drc):
+        m, _ = measure_board(path, drc, pro)
+        return m
+
+    def reroute(path, group, out, cap):
+        base = os.path.splitext(out)[0]
+        sp = base + ".strip.kicad_pcb"
+        strip_nets.strip(path, sp, nets=group)
+        AP.copy_rules(sp, pro)
+        b = load(sp)
+        ctx = cli.Ctx(b, rules_pro=pro)
+        rl = b.rules
+        rules = {"layers": route_layers(b), "w": rl.track_width, "clr": rl.clearance, "via": rl.via_dia, "drill": rl.via_drill}
+        resolved = ST.for_board(b)
+        pts = [p.pos for p in b.pads() if p.net in set(group)]
+        if a.grid not in (None, "auto"):
+            grid = float(a.grid)
+        else:
+            grid = min((feas.grid_for_box(ctx, ctx.eff, (p[0], p[1], p[0], p[1]))[0] for p in pts), default=0.25)
+        kargs, _ = style_krt_args(group, resolved, priority=True)
+        kargs += ["--keep-input-copper"]
+        run_krt(sp, out, group, None, rules, cap, False, a.extra, base + ".krt.json", base + ".krt.log", grid, extra_args=kargs,
+                env={"KICAD_RIP_PREEXISTING": "0", "KICAD_FINALIZE_RIP": "0"})
+        ok = os.path.exists(out)
+        if ok:
+            AP.copy_rules(out, pro)
+        return ok
+
+    def frozen(before, after, group):
+        return _copper_sig(load(before), group) == _copper_sig(load(after), group)
+
+    return PO.Env(lint, measure, reroute, frozen)
+
+
+def measure_board(path, drc, pro):
+    """droute.measure with the DRC optional (the polish loop runs it only for candidates that passed the cheap checks)."""
+    return measure(path, with_drc=drc, pro=pro)
+
+
+def polish_main(a, src, pd, name):
+    from . import polish as PO, styles as ST
+    from . import cli
+    env = polish_env(a, pd)
+    board = cli.load_board(src)
+    resolved = ST.for_board(board)
+    partner = lambda n: (resolved[n].partner() if n in resolved else None)
+    wd = os.path.join(pd, "polish")
+    os.makedirs(wd, exist_ok=True)
+    print("droute %s polish: %d worst net(s) of %s, budget %ds (rip + reroute one group at a time; accepted only if lint improves, "
+          "unrouted/DRC errors/unconnected do not increase, other nets untouched)" % (name, a.polish, config.current().short(src), a.time))
+    res = PO.polish(src, a.polish, env, wd, budget_s=float(a.time), cap_s=min(float(a.time), 180.0), partner=partner, min_score=1.0)
+    out = os.path.abspath(a.out) if a.out else os.path.join(pd, "polished.kicad_pcb")
+    if res["board"] != src:
+        shutil.copyfile(res["board"], out)
+        AP.copy_rules(out, getattr(a, "rules_pro", None))
+        print("  wrote %s" % out)
+    else:
+        print("  nothing accepted: no board written")
+    print("METRICS(polish) unrouted_conns=%d drc_err=%s unconnected=%s ugliness %.1f -> %.1f" % (
+        res["metrics"]["unrouted_conns"], res["metrics"].get("drc_errors", "?"), res["metrics"].get("drc_unconnected", "?"), res["before"], res["after"]))
+    with open(os.path.join(wd, "polish.jsonl"), "a") as fh:
+        fh.write(json.dumps({"src": src, "steps": res["steps"], "before": res["before"], "after": res["after"], "wall": res["wall"]}, default=list) + "\n")
+    return res
+
+
 # --------------------------------------------------------------------------- orchestration
 def _pass_dir(name):
     d = os.path.join(routes_dir(), name)
@@ -323,6 +460,8 @@ def main_args(a):
                 os.remove(cur)
         AP.copy_rules(applied, getattr(a, "rules_pro", None))
         src = os.path.abspath(a.from_board) if a.from_board else (cur if os.path.exists(cur) else applied)
+    if getattr(a, "polish", 0):
+        return polish_main(a, src, pd, name)
     n_prev = max(len([f for f in os.listdir(pd) if re.match(r"pass\d+\.kicad_pcb$", f)]), len([f for f in os.listdir(pd) if re.match(r"pass\d+\.krt\.log$", f)]))
     k = n_prev + 1
     dst = os.path.abspath(a.out) if a.out else os.path.join(pd, "pass%d.kicad_pcb" % k)      # KRT runs with cwd=krt_dir()
@@ -338,10 +477,40 @@ def main_args(a):
         rn_, bb = region_nets(ctx, a.region)
         nets += [n for n in rn_ if n not in nets]
         note.append("region %s box %.1f,%.1f..%.1f,%.1f -> %d nets with open connections" % (a.region, *bb, len(rn_)))
+    from . import styles as ST
+    resolved = ST.for_board(board)
+    priority = bool(getattr(a, "priority", False))
+    if priority:
+        pn = ST.priority_nets(resolved)
+        if not pn:
+            raise SystemExit("--priority: no net has a style with priority / via_penalty >= %g / pair in badpcb.json net_styles (see `badpcb styles BOARD`)" % ST.PRIORITY_VIA)
+        open_n = {x.net for x in ctx.rn.conns}
+        asked = set(nets)
+        nets = [n for n in pn if (not asked or n in asked) and (n in open_n or getattr(a, "strip", False))]
+        note.append("priority pass: %d of %d constrained nets in scope (%s)" % (len(nets), len(pn), " ".join(nets[:12]) or "none open"))
+        if not nets:
+            print("droute %s: priority nets are all routed already (add --strip to rip and reroute them)" % name)
+            return
+        others = sorted({t.net for t in board.tracks if t.net and t.net not in nets and t.net not in set(board.plane_nets())})
+        if others and not getattr(a, "clean_board", False):
+            note.append("NOTE: %d other signal net(s) already have copper; the priority pass is meant to run on a board without it "
+                        "(add --clean-board to route on a work copy without that copper)" % len(others))
+        elif others:
+            locked = {t.net for t in list(board.tracks) + list(board.vias) if t.locked}
+            drop = [n for n in others if n not in locked]
+            csrc = os.path.join(pd, "pass%d.clean.kicad_pcb" % k)
+            from . import strip_nets
+            strip_nets.strip(src, csrc, nets=drop)
+            AP.copy_rules(csrc, getattr(a, "rules_pro", None))
+            src = csrc
+            board = cli.load_board(src)
+            ctx = cli.Ctx(board, rules_pro=getattr(a, "rules_pro", None))
+            note.append("--clean-board: removed the copper of %d other signal net(s) in the work copy (%d kept: locked); the next pass treats the priority copper as existing" % (
+                len(drop), len(others) - len(drop)))
     if not nets and not a.component:
         nets = sorted({x.net for x in ctx.rn.conns})
         note.append("no scope given: all %d nets with open connections" % len(nets))
-    sig = board.signal_layers()
+    sig = route_layers(board)
     rl = board.rules
     if getattr(a, "repair", False):
         from . import repair as RP
@@ -436,7 +605,10 @@ def main_args(a):
         else:
             grid, gwhy = 0.25, "no open ends"
     print("  grid %.3g mm (%s; badpcb feasibility; override with --grid)" % (grid, gwhy))
-    rc, wall, timed_out, cmd = run_krt(src, dst, nets, a.component, rules, a.time, a.preview, a.extra, jo, lg, grid)
+    kargs, knotes = style_krt_args(nets, resolved, priority)
+    for n_ in knotes:
+        print("  style: " + n_)
+    rc, wall, timed_out, cmd = run_krt(src, dst, nets, a.component, rules, a.time, a.preview, a.extra, jo, lg, grid, extra_args=kargs)
     text = open(lg, errors="replace").read()
     parsed = parse_log(text)
     s = parsed["summary"]
@@ -462,7 +634,11 @@ def main_args(a):
         AP.copy_rules(os.path.join(pd, "current.kicad_pcb"), getattr(a, "rules_pro", None))      # KRT lowers the rules in the .kicad_pro it writes; keep ours
     print("  wrote %s" % dst)
     print(fmt_measure(m, "METRICS(droute)") + " time=%.0fs" % wall)
-    mode = "repair" if getattr(a, "repair", False) else "strip" if getattr(a, "strip", False) else "plain"
+    mode = "priority" if priority else "repair" if getattr(a, "repair", False) else "strip" if getattr(a, "strip", False) else "plain"
+    if priority:
+        from . import lint as LT
+        L_ = LT.lint_board(c2.board, rn=c2.rn)
+        print("\n".join("  " + x for x in LT.table(L_, only=set(nets), show_all=True, name="priority nets")))
     try:
         recs = [json.loads(l) for l in open(os.path.join(pd, "passes.jsonl")) if l.strip()][-3:]
         hist = [r_["measure"]["unrouted_net_names"] for r_ in recs]
