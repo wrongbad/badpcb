@@ -139,3 +139,43 @@ class TestSessionsAndCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWorkDir(unittest.TestCase):
+    """Intermediates go to the nested work dir; only the requested board (+ swaps_applied.md) lands beside the caller's target."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        json.dump({}, open(os.path.join(self.tmp, "badpcb.json"), "w"))
+        self._home = os.environ.pop("BADPCB_HOME", None)
+        self._sd = state.SESSION_DIR
+        state.SESSION_DIR = None
+        config.load(self.tmp)
+        self.board = os.path.join(self.tmp, "mini.kicad_pcb")
+        shutil.copyfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "kicad10_mini.kicad_pcb"), self.board)
+
+    def tearDown(self):
+        if self._home is not None:
+            os.environ["BADPCB_HOME"] = self._home
+        state.SESSION_DIR = self._sd
+        config.use({})
+        shutil.rmtree(self.tmp)
+
+    def test_apply_keeps_plan_and_report_out_of_the_board_folder(self):
+        code, out, err = run("session", "new", "w1", self.board)
+        self.assertEqual(code, 0, err)
+        out_pcb = os.path.join(self.tmp, "final.kicad_pcb")
+        AP.run("w1", out_pcb, None, verify=False)
+        top = sorted(os.listdir(self.tmp))
+        self.assertIn("final.kicad_pcb", top)
+        self.assertFalse([f for f in top if f.endswith(".json") and f != "badpcb.json"], top)          # no final.plan.json / apply_report.json
+        wd = os.path.join(self.tmp, ".badpcb", "work", "apply", "final")
+        self.assertTrue(os.path.exists(os.path.join(wd, "plan.json")))
+        self.assertTrue(os.path.exists(os.path.join(wd, "apply_report.json")))
+
+    def test_work_dir_follows_the_config(self):
+        json.dump({"work_dir": "scratch/w"}, open(os.path.join(self.tmp, "badpcb.json"), "w"))
+        config.load(self.tmp)
+        run("session", "new", "w2", self.board)
+        AP.run("w2", os.path.join(self.tmp, "o.kicad_pcb"), None, verify=False)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "scratch", "w", "apply", "o", "plan.json")))
