@@ -92,6 +92,13 @@ def sec_summary(c, full):
             m["unrouted"], nrt, m["wirelength"], m["crossings"], m["cu_crossings"], m["cu_locked"], m["cut_overflow_sum"],
             m["cut_overflow_max"], m["inversions"], m["plane_stubs"]),
         "  X = ratsnest-vs-ratsnest crossings; Xcu = ratsnest lines crossing existing other-net copper (signal layers)"]
+    from . import config as _cfg
+    if _cfg.current().intent():                    # only when intent is declared: METRICS stays as it was otherwise
+        from . import actions as _A, intent as _in
+        w = getattr(c, "intent_world", None) or _A.World(b, c.cfg)
+        ip, n = _in.penalty(w)
+        L[2] += " intent=%.1f" % ip
+        L.append("  intent = weighted penalty of %d declared intent(s) (0 = all met); details: badpcb audit --only INTENT, badpcb floorplan" % n)
     if c.assumed:
         L.append("  NOTE: board has no zones; assuming plane nets (excluded from routing, need only a via): " + " ".join(c.assumed))
     return L
@@ -446,6 +453,9 @@ def cmd_show(a):
         print("METRICS " + state.fmt_metrics(st.metrics()))
         for h in actions.describe_hints(st.world):
             print("  hint: " + h)
+        from . import intent as _in
+        for h in _in.describe(st.world):
+            print("  intent: " + h)
         return
     w = a.what
     if w in b.parts:
@@ -493,6 +503,7 @@ def cmd_report_session(a, st):
     print("session %s branch %s step %d  (report recomputes regions/capacities from the current board; act/eval METRICS use the frozen session grid)" % (
         st.name, st.branch_name, st.step()))
     print("METRICS " + state.fmt_metrics(st.metrics()))
+    c.intent_world = st.world
     hs = actions.describe_hints(st.world)
     if hs:
         print("  %d hint(s) recorded for groute (badpcb show %s)" % (len(hs), st.name))
@@ -541,7 +552,7 @@ def main(argv=None):
     x.add_argument("--full", action="store_true")
     x.add_argument("--roles", action="store_true", help="print the inferred part roles (decap, filter cap, crystal load, ...)")
     x.add_argument("--groute", action="store_true", help="also run groute (1 mm, short) and compare its hot spots with the audit's")
-    x.add_argument("--only", default="", help="comma list of detectors: ESCAPE,PLANE,BOWTIE,ORIENT,TENSION,ROLES,BUSORDER,COURTYARD,DENSITY")
+    x.add_argument("--only", default="", help="comma list of detectors: ESCAPE,PLANE,BOWTIE,ORIENT,TENSION,ROLES,INTENT,BUSORDER,COURTYARD,DENSITY")
     x.add_argument("--gscore", nargs="?", const=60.0, type=float, default=0.0, metavar="SECONDS", help="re-rank each finding's fixes by a short groute run on its region (badpcb/gscore.py), within this time budget")
     x.add_argument("--joint", nargs="?", const="", default=None, metavar="REF[,REF]", help="instead of the audit: one joint placement plan for the IC's fan intruders + decaps/filter caps (badpcb/joint.py)")
     x.add_argument("--edge", type=float, default=1.5, help="--joint: keep parts' courtyards this far (mm) from the board edge")
@@ -551,6 +562,10 @@ def main(argv=None):
     x.add_argument("refs", nargs="?", default="")
     x.add_argument("--edge", type=float, default=1.5)
     x.add_argument("--minimal", action="store_true", help="move only the parts that block a signal stub of the fan + their filter caps")
+    x = sub.add_parser("floorplan", help="step-2 view: blocks, fill, block nets/crossings, connectors, what faces each fine-pitch IC side, long links: badpcb floorplan <board|session> [--json] [--depth 8]")
+    x.add_argument("target", help=".kicad_pcb / model.json path or a session name")
+    x.add_argument("--json", action="store_true")
+    x.add_argument("--depth", type=float, default=8.0, help="mm: corridor out from each fine-pitch IC side in which blocks 'face' it (the fan zone itself is 2-3 mm)")
     x = sub.add_parser("groute", help="global router (PathFinder) on a session's current state + its hints, or a board: badpcb groute S [--region R8] [--nets EN*] [--time 30] [--no-map]")
     x.add_argument("target")
     x.add_argument("--cell", type=float, default=1.0)
@@ -638,6 +653,9 @@ def main(argv=None):
         if a.cmd == "plan" or (a.cmd == "audit" and a.joint is not None):
             from . import joint as _jt
             return _jt.main_args(a.target, a.refs if a.cmd == "plan" else a.joint, a.edge, a.minimal)
+        if a.cmd == "floorplan":
+            from . import floorplan as _fp
+            return _fp.main_args(a)
         if a.cmd == "groute":
             from . import gscore as _gs
             return _gs.main_args(a)
@@ -664,6 +682,7 @@ def cmd_project(a):
     print("swap groups  : %s" % (", ".join(g["id"] for g in P.swaps()["groups"]) or "none"))
     print("lock classes : %s" % (", ".join("%s=%s%s" % (k, os.path.basename(v[0]), "".join(" +" + f for f in ("protect", "trim") if P.lock_props(k)[f]))
                                            for k, v in P.lock_classes().items()) or "none"))
+    print("intent       : %s" % (", ".join("%s %d" % (k, n) for k, n in sorted(__import__("collections").Counter(e["kind"] for e in P.intent().values()).items())) or "none"))
     from . import audit
     print("audit        : %s" % (" ".join("%s=%g%s" % (k, v, "*" if k in P.audit() else "") for k, v in audit.params().items()) + "   (* = overridden)"))
     print("KIPY         : %s %s" % (config.kipy(), "" if config.kipy_available() else "(NOT FOUND)"))

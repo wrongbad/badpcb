@@ -29,23 +29,30 @@ Topology hints (stored in World.hints for groute; they never change the ratsnest
   layer NET|GLOB LAYER          freeze R8|x0,y0,x1,y1       prio NET [LEVEL]
   near REF TO MAXMM             (extra) keep-within constraint: later moves of REF/TO that break it are refused
 Append `force` to override locked-part / track warnings. `clear` removes a hint.
+Design intent (soft penalties, badpcb/intent.py; they live in the session like hints and have inverses):
+  intent add JSON         JSON as in badpcb.json "intent", one or more entries: `intent add {"near": ["C5", "U1.5", 3]}`,
+                          `intent add {"clear": {"zone": "escape:U1", "except": ["decaps:U1"]}}`, `intent add {"block": {"name": "vreg", "parts": [..]}}`
+  intent rm ID [ID..]     remove entries (ids as printed by `badpcb show S`: near1, edge2, clear1, block:mcu)
+  intent capture BLOCK    reference arrangement of block BLOCK := its parts' current positions relative to the block's anchor
 Legality: part inside the board, no *new* courtyard overlap with another part on the same side
 (bbox approximation), no *new* pad-level conflict (pad-to-pad incl. through-hole, pad-to-foreign-copper, holes, edge; badpcb/legal.py), locked parts refused unless forced, swap-group rules from swaps.py, vias clear of
 foreign copper and inside the plane zone of their net. Moving a part by <= 1 mm stretches the tracks attached to its pads
 (unless the end is a junction/via or the stretched segment would violate clearance); larger moves leave them in place (warning, apply rips them).
 """
+import copy
 import fnmatch
 import json
 import math
 import re
 import shlex
 
-from . import geom, swaps
+from . import config, geom, swaps
 
 HINT_OPS = ("corridor", "side", "reserve", "layer", "freeze", "priority", "near")
 GEOM_OPS = ("move", "nudge", "rotate", "flip")
 LOCK_OPS = ("unlock", "lock", "trim", "add_tracks")
-ALL_OPS = GEOM_OPS + ("swap_pins", "assign", "reassign_keys", "add_via", "del_via", "reshape") + LOCK_OPS + HINT_OPS
+INTENT_OPS = ("intent_add", "intent_rm", "intent_capture")
+ALL_OPS = GEOM_OPS + ("swap_pins", "assign", "reassign_keys", "add_via", "del_via", "reshape") + LOCK_OPS + HINT_OPS + INTENT_OPS
 
 # op -> (positional argument names, types).  Types: s str, f float, l list of str
 SPEC = {
@@ -153,6 +160,13 @@ class Action:
             s = "freeze %s" % a["region"]
         elif op == "near":
             s = "near %s %s %s" % (a["ref"], a["to"], f(a["max"]))
+        elif op == "intent_add":
+            ents = a.get("entries") or []
+            s = "; ".join(("intent set %s" % e.get("id") if a.get("replace") else "intent add " + json.dumps(config.intent_to_obj(e), separators=(",", ":"))) for e in ents) or "intent add"
+        elif op == "intent_rm":
+            s = "intent rm " + " ".join(a.get("ids") or [])
+        elif op == "intent_capture":
+            s = "intent capture %s" % a["block"]
         elif op in ("unlock", "lock"):
             s = "%s %s" % (op, a.get("target") or "<%d items>" % len(a.get("ids", [])))
         elif op == "trim":
@@ -175,10 +189,34 @@ def _num(tok, what):
         raise ActionError("%s: expected a number, got '%s'" % (what, tok))
 
 
+def _parse_intent(sub, rest):
+    if sub == "add":
+        try:
+            ents = config.intent_entries(json.loads(rest), config.current())
+        except json.JSONDecodeError as e:
+            raise ActionError("intent add: JSON expected, e.g. intent add {\"near\": [\"C5\", \"U1.5\", 3]} (%s)" % e)
+        except config.IntentError as e:
+            raise ActionError("intent add: %s" % e)
+        if not ents:
+            raise ActionError("intent add: nothing to add")
+        return Action("intent_add", entries=ents)
+    if sub == "capture":
+        if not rest or " " in rest:
+            raise ActionError("intent capture BLOCK")
+        return Action("intent_capture", block=rest)
+    ids = [x for x in re.split(r"[,\s]+", rest) if x]
+    if not ids:
+        raise ActionError("intent rm ID [ID..]")
+    return Action("intent_rm", ids=ids)
+
+
 def parse_one(text):
     text = text.strip()
     if text.startswith("{"):
         return Action.from_dict(json.loads(text))
+    m = re.match(r"^intent\s+(add|rm|remove|del|capture)\b\s*(.*)$", text, re.I | re.S)
+    if m:
+        return _parse_intent(m.group(1).lower(), m.group(2).strip())
     toks = [t for t in shlex.split(text.replace("(", " ").replace(")", " ")) if t.lower() not in FILLER]
     if not toks:
         raise ActionError("empty action")
@@ -335,6 +373,8 @@ class World:
         self.board = board
         self.cfg = cfg if cfg is not None else swaps.load_config(board=board)
         self.hints = {"corridor": {}, "side": {}, "reserve": {}, "layer": {}, "freeze": {}, "priority": {}, "near": {}}
+        self.intent = config.current().intent()      # {id: entry}: soft design intent (badpcb/intent.py); edited by intent_* actions
+        self.intent_ver = 0
         self.cuts = None        # set of valid cut ids / region ids when known (validates hints)
         self.regions = None
         self.loc = {}
@@ -891,6 +931,8 @@ def check(world, act):
         pass
     elif op in HINT_OPS:
         _check_hint(world, act, errs)
+    elif op in INTENT_OPS:
+        _check_intent(world, act, errs, warns)
     return errs, warns
 
 
@@ -955,6 +997,80 @@ def _check_hint(world, act, errs):
         for k in ("ref", "to"):
             if a[k] not in world.board.parts:
                 errs.append("no part '%s'" % a[k])
+
+
+def _intent_ids(world, ids):
+    """Ids given by the user -> real ids (a bare block name means block:NAME). Unknown ones come back as None."""
+    return [i if i in world.intent else ("block:" + i if "block:" + i in world.intent else None) for i in ids]
+
+
+def _check_intent(world, act, errs, warns):
+    from . import intent
+    a, op = act.a, act.op
+    if op == "intent_add":
+        ents = copy.deepcopy(a.get("entries") or [])
+        try:
+            config.assign_ids(ents, taken=() if a.get("replace") else world.intent)
+        except config.IntentError as e:
+            errs.append(str(e))
+            return
+        if not a.get("replace"):
+            for e in ents:
+                if e["id"] in world.intent:
+                    errs.append("intent %s exists" % e["id"])
+        for e in ents:
+            sels = e.get("parts") or e.get("a") or e.get("ref") or []
+            sels = list(sels) + (e["b"] if isinstance(e.get("b"), list) else []) + (e.get("except") or [])
+            if e["kind"] == "clear" and isinstance(e["zone"], str):
+                if e["zone"].split(":")[1] not in world.board.parts:
+                    warns.append("intent: zone IC %s is not on the board" % e["zone"].split(":")[1])
+            if e["kind"] == "near" and intent._pad_point(world.board, e["b"])[0] is None:
+                warns.append("intent: no part/pad '%s'" % e["b"])
+            nets = None
+            for sel in sels:
+                nets = nets or intent._Nets(world.board)
+                if not intent.resolve(world.board, sel, nets):
+                    warns.append("intent: selector '%s' matches no part" % sel)
+    elif op == "intent_rm":
+        for i, r in zip(a["ids"], _intent_ids(world, a["ids"])):
+            if r is None:
+                errs.append("no intent '%s' (have: %s)" % (i, " ".join(sorted(world.intent)) or "none"))
+    else:
+        e = world.intent.get("block:" + a["block"]) or world.intent.get(a["block"])
+        if e is None or e["kind"] != "block":
+            errs.append("no intent block '%s' (have: %s)" % (a["block"], " ".join(sorted(k[6:] for k in world.intent if k.startswith("block:"))) or "none"))
+            return
+        from . import intent as _in
+        try:
+            _in.capture(world, e["name"])
+        except (ValueError, KeyError) as ex:
+            errs.append(str(ex))
+
+
+def _apply_intent(world, act):
+    from . import intent
+    a, op = act.a, act.op
+    try:
+        if op == "intent_add":
+            ents = copy.deepcopy(a.get("entries") or [])
+            got = config.assign_ids(ents, taken=() if a.get("replace") else world.intent)
+            if a.get("replace"):
+                old = [copy.deepcopy(world.intent[i]) for i in got if i in world.intent]
+                world.intent.update(got)
+                return Action("intent_add", force=True, entries=old, replace=True)
+            world.intent.update(got)
+            return Action("intent_rm", force=True, ids=list(got))
+        if op == "intent_rm":
+            ids = [i for i in _intent_ids(world, a["ids"]) if i]
+            gone = [world.intent.pop(i) for i in ids]
+            return Action("intent_add", force=True, entries=gone, replace=True)
+        e = world.intent.get("block:" + a["block"]) or world.intent[a["block"]]
+        new = intent.capture(world, e["name"])
+        old = world.intent[e["id"]]
+        world.intent[e["id"]] = new
+        return Action("intent_add", force=True, entries=[copy.deepcopy(old)], replace=True)
+    finally:
+        world.intent_ver += 1                    # the compiled intent (selectors, reference positions) is rebuilt on next use
 
 
 # ----------------------------------------------------------------------------- apply
@@ -1080,6 +1196,8 @@ def apply(world, act, check_first=True):
         return _apply_trim(world, act)
     if op == "add_tracks":
         return _apply_add_tracks(world, act)
+    if op in INTENT_OPS:
+        return _apply_intent(world, act), set()
     return _apply_hint(world, act), set()
 
 

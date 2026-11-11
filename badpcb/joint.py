@@ -11,7 +11,7 @@ is wanted near the IC is placed in ONE pass against the same constraints:
   * legal.py/actions.fits legality against the board *as already modified by the earlier parts of the plan*,
   * a plane-via stub the part owns moves with it (delvia ... stub; move; via ... pad=).
 Most constrained part first (shortest distance rule), candidate score = distance to the pin + 0.25 x displacement + edge/rotation/rip penalties
-+ a little intent wirelength. Pure planning: the live world is restored before returning. The plan is validated by
++ a little intent wirelength + 0.5 x the weighted design-intent penalty of the spot (`clear` zones, `near`, `edge`). Pure planning: the live world is restored before returning. The plan is validated by
 re-scanning the fan zones, re-inferring the roles and evaluate.py on the whole action chain.
 """
 import time
@@ -19,6 +19,7 @@ import time
 from . import actions as A
 from . import audit as AU
 from . import geom, legal
+from . import intent as IN
 from .audit import Fix, Trial, _pads_hit, escape_zones, zone_scan
 
 
@@ -148,6 +149,8 @@ def _cands(ac, m, rects, edge, step=0.3, relax=1.0, grow=0.3):
                 disp = geom.dist((x, y), p.pos)
                 wl = sum(geom.dist(pads[0][0], q) for q in partners) / len(partners) if partners else 0.0
                 cost = 0.5 * d + 0.25 * disp + rc + 0.03 * wl + (0.3 * (3.0 - mg) / 1.5 if mg < 3.0 else 0.0)
+                if ac.w.intent:                          # soft design intent: stay out of `clear` zones, keep `near`/`edge` entries (weighted penalty)
+                    cost += 0.5 * IN.part_cost(ac.w, m.ref, bb)
                 out.append((cost, (x, y), rot, d))
     out.sort(key=lambda c: c[0])
     return out
@@ -303,6 +306,7 @@ def run(st, refs=None, edge=1.5, name=None, minimal=False):
             if a and a != mcu and a not in refs and ac.is_ic(ac.b.parts[a]) and not a.startswith("J") and AU.role_violation(ro):
                 refs.append(a)
     before_z, before_v = _state_numbers(ac, refs)
+    ipen0 = IN.penalty(ac.w)[0]
     acts, rows, failed = solve(ac, refs, edge, minimal=minimal)
     L = ["badpcb joint plan %s: IC %s, edge margin %.1f mm%s" % (name or st.name, ",".join(refs), edge, ", MINIMAL (only the parts blocking a stub + their filter caps)" if minimal else "")]
     for ref, why, old, new, d, lim, ns, rlx in rows:
@@ -325,9 +329,12 @@ def run(st, refs=None, edge=1.5, name=None, minimal=False):
         for a in acts:
             tr.apply(A.parse(a)[0])
         after_z, after_v = _state_numbers(ac, refs)
+        ipen1 = IN.penalty(ac.w)[0]
     L.append("fan zones (used%, blocked signal stubs): " + "  ".join(
         "%s %.0f%%/%d -> %.0f%%/%d" % (k, 100 * before_z[k][0], before_z[k][1], 100 * after_z[k][0], after_z[k][1]) for k in sorted(before_z)))
     L.append("role violations %d -> %d%s" % (len(before_v), len(after_v), " (still: %s)" % " ".join(after_v) if after_v else ""))
+    if ac.w.intent:
+        L.append("intent %.1f -> %.1f" % (ipen0, ipen1))
     r = fx.res
     L.append("evaluate: %s  dscore %+.1f (%s)  %s" % ("legal" if r.ok else "ILLEGAL", r.dscore, AU.fmt_delta(r.d),
                                                       "; ".join(r.warnings[:2])[:120] if r.warnings else ""))

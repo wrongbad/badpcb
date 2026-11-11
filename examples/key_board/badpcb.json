@@ -21,6 +21,22 @@
    "band_depth": 5.0
   }
  },
+  "intent": {
+    "_comment": "Soft design intent (penalties only, see README 'Design intent'). Reference layout: Raspberry Pi RP2350 80-QFN minimal design; ref.map = {part here: part there}.",
+    "refs": {"rp2350_minimal": {"pcb": "../ref/rp2350_minimal/B/RP2350_80QFN_minimal.kicad_pcb", "anchor": "U1"}},
+    "blocks": {
+      "mcu":   {"parts": ["U1", "decaps:U1"]},
+      "vreg":  {"parts": ["L1", "C15", "C16", "C17", "R3"], "max_span_mm": 10,
+                "ref": {"pcb": "../ref/rp2350_minimal/B/RP2350_80QFN_minimal.kicad_pcb", "anchor": "U1", "map": {"C15": "C6", "C16": "C9", "C17": "C7"}}},
+      "flash": {"parts": ["U2"],
+                "ref": {"pcb": "../ref/rp2350_minimal/B/RP2350_80QFN_minimal.kicad_pcb", "anchor": "U1", "map": {"U2": "U3"}}},
+      "xtal":  {"parts": ["Y1", "C21", "C22", "R4"], "max_span_mm": 8,
+                "ref": {"pcb": "../ref/rp2350_minimal/B/RP2350_80QFN_minimal.kicad_pcb", "anchor": "U1", "map": {"C21": "C3", "C22": "C4", "R4": "R2"}}}
+    },
+    "near": [["decaps:U1", "U1", 3], ["bulk:U1", "U1", 10, 0.3], ["U2", "U1", 8, 1.5], ["Y1", "U1", 6], ["C21,C22", "Y1", 2], ["L1", "U1", 5]],
+    "clear": [{"zone": "escape:U1", "except": ["decaps:U1", "SW*"]}],
+    "edge": [["J1", "back", 2], ["J2", "front", 2], ["J3", "front", 2]]
+  },
  "krt": {
   "dir": "/path/to/KiCadRoutingTools",
   "python": "/path/to/KiCadRoutingTools/.venv/bin/python"

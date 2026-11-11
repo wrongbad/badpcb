@@ -35,24 +35,25 @@ def session_path(name):
 
 
 def _delta(m0, m1):
-    return {k: round(m1[k] - m0[k], 3) for k in E.METRIC_KEYS}
+    return {k: round(m1.get(k, 0) - m0.get(k, 0), 3) for k in E.METRIC_KEYS}
 
 
 def fmt_metrics(m):
     return ("X=%d Xcu=%d(%d locked) wl=%.0fmm ovf=%d/%d inv=%d pin_inv=%d ang=%.0f stubs=%d unrouted=%d" % (
         m["X"], m["Xcu"], m.get("Xcu_locked", 0), m["wirelength"], m["overflow_sum"], m["overflow_max"], m["inversions"], m["pin_inv"],
-        m["ang_deg"], m["stubs"], m["unrouted"]))
+        m["ang_deg"], m["stubs"], m["unrouted"]) + (" intent=%.1f" % m["intent"] if m.get("intent_n") else ""))
 
 
 def fmt_delta(d):
     """Compact signed deltas, nonzero only: 'X -12 Xcu +3 wl -33.1mm ...' (or 'no change')."""
     names = [("X", "X", "%+d"), ("Xcu", "Xcu", "%+d"), ("wirelength", "wl", "%+.1fmm"), ("overflow_sum", "ovf", "%+d"),
              ("overflow_max", "ovfmax", "%+d"), ("inversions", "inv", "%+d"), ("pin_inv", "pin_inv", "%+d"),
-             ("ang_deg", "ang", "%+.0f"), ("stubs", "stubs", "%+d"), ("unrouted", "unrouted", "%+d")]
+             ("ang_deg", "ang", "%+.0f"), ("stubs", "stubs", "%+d"), ("unrouted", "unrouted", "%+d"),
+             ("intent", "intent", "%+.1f")]
     out = []
     for k, n, f in names:
         v = d.get(k, 0)
-        if abs(v) > (0.05 if k == "wirelength" else 0.5 if k == "ang_deg" else 1e-9):
+        if abs(v) > (0.05 if k in ("wirelength", "intent") else 0.5 if k == "ang_deg" else 1e-9):
             out.append("%s %s" % (n, f % v))
     return " ".join(out) or "no change"
 

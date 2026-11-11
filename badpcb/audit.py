@@ -3,7 +3,7 @@
     python3 -m badpcb audit <board.kicad_pcb | session> [--json] [--full] [--roles] [--groute] [--only ESCAPE,PLANE,..]
     badpcb suggest <session> audit            # the audit's best fix per finding as an eval table: `badpcb act S @N`
 
-Detectors (priority order): ESCAPE PLANE BOWTIE ORIENT TENSION ROLES BUSORDER COURTYARD DENSITY.
+Detectors (priority order): ESCAPE PLANE BOWTIE ORIENT TENSION ROLES INTENT BUSORDER COURTYARD DENSITY.
 Every finding has a severity, the named handles (parts, nets, regions), evidence numbers, fixes written as badpcb compact
 actions (pasteable into `badpcb act` / `badpcb eval`) with the fix's predicted delta (evaluate.py, read-only: applied and undone)
 and its legality (actions.check -> legal.py).  A finding with fixes that are all illegal is reported without a fix.
@@ -26,9 +26,10 @@ from collections import defaultdict
 from . import actions as A
 from . import evaluate as EV
 from . import config, feas, geom, legal, ratsnest, swaps
+from . import intent as IN
 from .state import fmt_delta, parse_specs
 
-DETS = ["ESCAPE", "PLANE", "BOWTIE", "ORIENT", "TENSION", "ROLES", "BUSORDER", "COURTYARD", "DENSITY"]
+DETS = ["ESCAPE", "PLANE", "BOWTIE", "ORIENT", "TENSION", "ROLES", "INTENT", "BUSORDER", "COURTYARD", "DENSITY"]
 SEV_W = {"ERR": 10.0, "WARN": 4.0, "NOTE": 1.0}
 SEV_ORD = {"ERR": 0, "WARN": 1, "NOTE": 2}
 COURTYARD_BIAS = 0.09         # extractor courtyard boxes are ~0.045 mm larger per side than KiCad's polygons
@@ -58,6 +59,7 @@ DEFAULTS = {
     "zone_depth_max_mm": 3.0,
     "zone_depth_pitch": 0.3,
     "zone_widen_mm": 1.0,        # fan-zone widening beyond the outermost pads, per side
+    "intent_err": 8.0,           # INTENT: an entry whose weighted penalty is at least this is an ERR (below: WARN)
 }
 
 
@@ -318,6 +320,34 @@ class Ctx:
         return res[:keep]
 
 
+def _ctx_ring_spot(self, ref, center, ok, rmax=12.0, step=0.4, nang=24, rots=None):
+    """Nearest legal placement of `ref` to `center` (centre of the part) for which ok(bbox, pos, rot) holds: rings of growing radius,
+    same orientation first (rotating is only tried for small passives). -> (x, y, rot) or None."""
+    p = self.b.parts[ref]
+    if rots is None:
+        rots = [p.rot, p.rot + 180, p.rot + 90, p.rot + 270] if self.movable(ref) else [p.rot]
+    pk = self.plane_keep(ref)
+    r = 0.0
+    while r <= rmax + 1e-9:
+        cands = []
+        for rot in rots:
+            for j in range(nang if r > 0 else 1):
+                a = 2 * math.pi * j / nang
+                pos = (round(center[0] + r * math.cos(a), 2), round(center[1] + r * math.sin(a), 2))
+                bb, pads = A.place_geom(self.w, ref, pos, rot, p.side)
+                if not ok(bb, pos, rot) or (pk and not pk(pads)) or not A.fits(self.w, ref, pos, rot):
+                    continue
+                cands.append((abs(A._norm(rot - p.rot)), geom.dist(pos, p.pos), pos, A._norm(rot)))
+        if cands:
+            c = min(cands, key=lambda t: (t[0], t[1]))
+            return c[2][0], c[2][1], c[3]
+        r += step
+    return None
+
+
+Ctx.ring_spot = _ctx_ring_spot
+
+
 def _pads_hit(part, pads, rects, grow=0.1):
     for d, (pp, pr, pl) in zip(part.pads, pads):
         sh = legal.pad_shape(pp, pr, d.size, d.shape)
@@ -342,11 +372,22 @@ class EZone:
     pass
 
 
-def escape_zones(ac, refs=None):
-    """Escape zone of every fine-pitch side: rect from the pad row outward by D (2..3 mm, 0.3 * pitch * pins), widened by 1 mm."""
+def escape_zones(ac, refs=None, any_pitch=False):
+    """Escape zone of every fine-pitch side: rect from the pad row outward by D (2..3 mm, 0.3 * pitch * pins), widened by 1 mm.
+    any_pitch: for the named `refs`, also parts that are not fine-pitch (design-intent `clear` zones); cheap (only those parts are scanned)."""
     b = ac.b
     K = params()
-    fp, geo = feas.fine_parts(b)
+    if any_pitch and refs:
+        geo = {}
+        for r in refs:
+            if r in b.parts:
+                S = feas.sides(b.parts[r])
+                g = {k: feas.side_geom(k, L) for k, L in S.items()}
+                g = {k: v for k, v in g.items() if v}
+                if g:
+                    geo[r] = (S, g)
+    else:
+        fp, geo = feas.fine_parts(b)
     out = []
     for ref, (S, g) in sorted(geo.items()):
         if refs and ref not in refs:
@@ -1331,6 +1372,142 @@ def detect_roles(ac):
     return out
 
 
+# ============================================================================= INTENT
+def _intent_fix_move(ac, it, C, ref, center, rmax):
+    """Move `ref` to the nearest legal spot to `center` where this entry no longer penalises it and the other entries that involve the
+    part do not get worse (the part's courtyard is checked against the others as placed)."""
+    w, b = ac.w, ac.b
+    bbf = lambda bb: (lambda r: bb if r == ref else b.parts[r].bbox)
+    here = b.parts[ref].bbox
+    budget = IN.part_cost(w, ref, here) - IN.eval_item(w, C, it, bbf(here), only=ref)[0] + 1e-9
+    ok = lambda bb, pos, rot: IN.eval_item(w, C, it, bbf(bb), only=ref)[0] <= 1e-9 and IN.part_cost(w, ref, bb) <= budget
+    return ac.ring_spot(ref, center, ok, rmax=rmax)
+
+
+def _spot_act(p, s):
+    return mv(p.ref, s[0], s[1], s[2] if abs(A._norm(s[2] - p.rot)) > 1e-6 else None)
+
+
+def _intent_movable(ac, ref):
+    p = ac.b.parts.get(ref)
+    return bool(p) and not p.locked and ref != ac.w.cfg["mcu"] and len(p.pads) <= 20 and p.area < 150
+
+
+def detect_intent(ac):
+    """Violated design intents (badpcb.json "intent" / `intent add`): one finding per entry with its worst offenders, WARN unless the
+    weighted penalty reaches params()["intent_err"]. Reference drift and block spread are findings of their block."""
+    w, b = ac.w, ac.b
+    if not w.intent:
+        return []
+    K = params()
+    C = IN.compiled(w)
+    out = []
+    for msg in C.warnings:
+        out.append(Finding("INTENT", "NOTE", "intent: " + msg, handles={"role": "intent"}, ev={"warning": msg}, mag=0.0))
+    for it, pen, viol in IN.report(w):
+        if pen < 0.05:
+            continue
+        e, k = it["e"], it["kind"]
+        sev = "ERR" if pen >= K["intent_err"] else "WARN"
+        worst = sorted([v for v in viol if v.get("part")], key=lambda v: -v["pen"])
+        parts = [v["part"] for v in worst]
+        h = {"role": "intent", "intent": it["id"], "parts": parts}
+        ev = {"id": it["id"], "kind": k, "penalty": round(pen, 1), "weight": it["w"], "n": len(viol)}
+        fixes, advice = [], []
+        where = b.parts[parts[0]].pos if parts else None
+        if k == "near":
+            txt = ", ".join("%s %.1f/%g mm to %s" % (v["part"], v["have"], v["limit"], e["b"]) for v in worst[:5]) + (" ..." if len(worst) > 5 else "")
+            title = "near %s: %s" % (e["b"], txt)
+            h["nets"] = []
+            movers = [v for v in worst if _intent_movable(ac, v["part"]) and v["part"] != it["B"]]
+        elif k == "apart":
+            title = "apart: " + ", ".join("%s %.1f/%g mm from %s" % (v["part"], v["have"], v["limit"], v["other"]) for v in worst[:5])
+            movers = [v for v in worst if _intent_movable(ac, v["part"])]
+        elif k == "edge":
+            title = "edge %s: " % e["side"] + ", ".join("%s %.1f mm from the edge (max %g)" % (v["part"], v["have"], v["limit"]) for v in worst[:5])
+            movers = [v for v in worst if _intent_movable(ac, v["part"])]
+        elif k == "clear":
+            z = e["zone"] if isinstance(e["zone"], str) else "box %s" % ",".join("%g" % x for x in e["zone"])
+            title = "clear %s: %d part(s) inside: %s" % (z, len(viol), ", ".join("%s %.1f mm2" % (v["part"], v["amount"]) for v in worst[:6]))
+            h["intruders"] = parts
+            movers = [v for v in worst if _intent_movable(ac, v["part"])]
+            for v in worst:
+                if not _intent_movable(ac, v["part"]):
+                    advice.append("%s is locked/large: move it by hand (courtyard %.1f mm2 inside %s)" % (v["part"], v["amount"], z))
+        else:                                                                            # block: span and/or reference drift
+            sp = [v for v in viol if v.get("kind") == "span"]
+            dr = [v for v in viol if v.get("kind") == "drift"]
+            bits = []
+            if sp:
+                bits.append("spread %.1f mm (max %g)" % (sp[0]["have"], sp[0]["limit"]))
+            if dr:
+                d = dr[0]["drift"]
+                bits.append("%.1f mm RMS off the reference%s" % (d["rms"], ", %d part(s) turned" % d["rot"] if d["rot"] else ""))
+            title = "block %s: %s" % (e["name"], "; ".join(bits))
+            h["role"] = "intent"
+            movers = []
+            acts = []
+            if dr:
+                d = dr[0]["drift"]
+                ordered = sorted(d["parts"].items(), key=lambda kv: -(kv[1][0] + 2.0 * kv[1][3]))
+                parts = [r for r, v in ordered if v[0] > 0.5 or v[3]]
+                h["parts"] = parts
+                where = b.parts[parts[0]].pos if parts else None
+                with Trial(ac.w) as tr:
+                    for r, (off, pos, erot, miss) in ordered[:8]:
+                        if (off <= 0.5 and not miss) or not _intent_movable(ac, r) or r == it["anchor"]:
+                            continue
+                        p = b.parts[r]
+                        rots = [min((p.rot, p.rot + 90, p.rot + 180, p.rot + 270), key=lambda q: (IN._rot_miss(q, erot), abs(A._norm(q - p.rot))))]
+                        sp_ = ac.ring_spot(r, pos, lambda bb, pp, rr: True, rmax=3.0, rots=rots)
+                        if sp_ is None:
+                            continue
+                        a = A.Action("move", ref=r, x=sp_[0], y=sp_[1], **({"rot": sp_[2]} if abs(A._norm(sp_[2] - p.rot)) > 1e-6 else {}))
+                        if tr.apply(a):
+                            acts.append(a.compact())
+                if acts:
+                    fixes.append(Fix(acts, "members to their reference positions", "ref"))
+                    if len(acts) > 1:
+                        fixes.append(Fix(acts[:1], "worst one only", "ref1"))
+            if sp and not fixes:
+                A_ = [r for r in it["A"] if r != it["anchor"] and _intent_movable(ac, r)]
+                if A_:
+                    cx = sum(b.parts[r].pos[0] for r in it["A"]) / len(it["A"])
+                    cy = sum(b.parts[r].pos[1] for r in it["A"]) / len(it["A"])
+                    far = max(A_, key=lambda r: geom.dist(b.parts[r].pos, (cx, cy)))
+                    sp_ = ac.ring_spot(far, (cx, cy), lambda bb, pp, rr: True, rmax=(e["max_span_mm"] or 10) / 2 + 3.0)
+                    if sp_:
+                        fixes.append(Fix([_spot_act(b.parts[far], sp_)], "farthest member back toward the block centre", "span"))
+                        h["parts"] = [far]
+            if not fixes:
+                advice.append("no legal move found; the block members are boxed in or locked")
+            f = Finding("INTENT", sev, title, handles=h, ev=ev, fixes=fixes, where=where, mag=min(2.0, pen / K["intent_err"]))
+            f.advice = advice
+            out.append(f)
+            continue
+        # near / apart / edge / clear: nearest legal spot (to where the part is now) where the entry stops penalising it
+        acts = []
+        with Trial(ac.w) as tr:
+            for v in movers[:4]:
+                p = b.parts[v["part"]]
+                s_ = _intent_fix_move(ac, it, C, p.ref, p.pos, rmax=min(60.0, 3.0 + 2.5 * max(v.get("amount", 0.0), 1.0) + (v.get("have", 0.0) if k == "near" else 0.0)))
+                if s_ is None:
+                    continue
+                a = A.Action("move", ref=p.ref, x=s_[0], y=s_[1], **({"rot": s_[2]} if abs(A._norm(s_[2] - p.rot)) > 1e-6 else {}))
+                if tr.apply(a):
+                    acts.append(a.compact())
+        if acts:
+            fixes.append(Fix(acts, "nearest legal spot that satisfies the intent", "intent"))
+            if len(acts) > 1:
+                fixes.append(Fix(acts[:1], "worst one only", "intent1"))
+        elif not advice:
+            advice.append("no legal spot satisfies this intent for the worst parts (crowding); relax the entry (intent rm %s) or move something else first" % it["id"])
+        f = Finding("INTENT", sev, title, handles=h, ev=ev, fixes=fixes, where=where, mag=min(2.0, pen / K["intent_err"]))
+        f.advice = advice
+        out.append(f)
+    return out
+
+
 def sec_roles(ac):
     rs = ac.roles()
     L = ["thresholds (badpcb.json \"audit\" overrides): " + " ".join("%s=%g" % kv for kv in params().items()),
@@ -1510,7 +1687,7 @@ def _nat(s):
 
 
 DETECTORS = {"ESCAPE": detect_escape, "PLANE": detect_plane, "BOWTIE": detect_bowtie, "ORIENT": detect_orient, "TENSION": detect_tension,
-             "ROLES": detect_roles, "BUSORDER": detect_busorder, "COURTYARD": detect_courtyard, "DENSITY": detect_density}
+             "ROLES": detect_roles, "INTENT": detect_intent, "BUSORDER": detect_busorder, "COURTYARD": detect_courtyard, "DENSITY": detect_density}
 
 
 class Report:
@@ -1542,6 +1719,8 @@ def _improves(f, fix):
         return r.dscore < -0.05
     if f.det == "BUSORDER":
         return r.dscore < 0
+    if f.det == "INTENT":
+        return r.d.get("intent", 0) < -0.05
     if f.det == "ESCAPE":
         return (fix.gain or 0) > 0.01 or (fix.tag == "swap" and r.dscore < -0.3)
     return True
@@ -1605,7 +1784,7 @@ def run(st, only=None, rules_pro=None, name=None, budget=MAX_EVALS, gscore=None)
     findings = keep
     taken = set()
     for f in findings:
-        if f.det in ("ESCAPE", "PLANE", "ROLES", "COURTYARD", "BUSORDER"):
+        if f.det in ("ESCAPE", "PLANE", "ROLES", "INTENT", "COURTYARD", "BUSORDER"):
             for k in ("parts", "part"):
                 v = f.handles.get(k)
                 taken |= set(v if isinstance(v, list) else [v] if v else [])

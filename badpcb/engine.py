@@ -14,16 +14,16 @@ from collections import defaultdict
 
 from . import geom, ratsnest, swaps
 
-METRIC_KEYS = ["X", "Xcu", "wirelength", "overflow_sum", "overflow_max", "inversions", "pin_inv", "ang_deg", "stubs", "unrouted"]
+METRIC_KEYS = ["X", "Xcu", "wirelength", "overflow_sum", "overflow_max", "inversions", "pin_inv", "ang_deg", "stubs", "unrouted", "intent"]
 LOWER_IS_BETTER = set(METRIC_KEYS)
 # weights of the scalar "score" used to rank candidates (lower = better). The agent should read the Δ columns, not the score.
 WEIGHTS = {"X": 1.0, "Xcu": 0.3, "wirelength": 0.02, "overflow_sum": 2.0, "overflow_max": 1.0, "inversions": 2.0,
-           "pin_inv": 1.0, "ang_deg": 0.05, "stubs": 3.0, "unrouted": 0.0}
+           "pin_inv": 1.0, "ang_deg": 0.05, "stubs": 3.0, "unrouted": 0.0, "intent": 1.0}
 CELL = 8.0
 
 
 def score(m):
-    return sum(WEIGHTS[k] * m[k] for k in WEIGHTS)
+    return sum(WEIGHTS[k] * m.get(k, 0) for k in WEIGHTS)
 
 
 def _cells(bb, cs=CELL):
@@ -312,7 +312,9 @@ class Engine:
         dem = [(len(self.cut_cross[c]) - self.T.cuts[c].cap_total) for c in self.T.cuts]
         ov = [max(0, d) for d in dem]
         pin_inv, ang = self.pin_metrics()
-        return {"X": self.X, "Xcu": self.Xcu, "Xcu_locked": self.Xcu_locked,
+        from . import intent                  # soft design intent: weighted penalties, a pure function of the part poses (0 when none declared)
+        ipen, inum = intent.penalty(self.world)
+        return {"intent": round(ipen, 3), "intent_n": inum, "X": self.X, "Xcu": self.Xcu, "Xcu_locked": self.Xcu_locked,
                 "wirelength": round(sum(r.conn.length for r in self.recs.values()), 3),
                 "overflow_sum": sum(ov), "overflow_max": max(ov) if ov else 0,
                 "inversions": self._inversions(), "pin_inv": pin_inv, "ang_deg": round(ang, 1),
