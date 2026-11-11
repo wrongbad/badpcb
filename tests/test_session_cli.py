@@ -103,6 +103,19 @@ class TestSessionsAndCli(unittest.TestCase):
         self.assertIn("METRICS unrouted=", out)
         self.assertIn("== mcu ==", out)
 
+    def test_project_without_locks_says_no_lock_classes(self):
+        code, out, _ = run("project")
+        self.assertEqual(code, 0)
+        self.assertIn("no lock classes", out)
+
+    def test_project_with_missing_lock_files_does_not_fail(self):
+        json.dump({"locks": {"classes": {"lane": {"file": "nope.json", "protect": True}}}}, open(os.path.join(self.proj, "badpcb.json"), "w"))
+        config.load(self.proj)
+        code, out, err = run("project")
+        self.assertEqual(code, 0, err)
+        self.assertIn("lane=nope.json", out)
+        self.assertIn("FILE MISSING", out)
+
     def test_project_command(self):
         code, out, _ = run("project")
         self.assertEqual(code, 0)

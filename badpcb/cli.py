@@ -519,7 +519,7 @@ def main(argv=None):
         sys.stdout.reconfigure(line_buffering=True)
     except Exception:
         pass
-    ap = argparse.ArgumentParser(prog="badpcb", description="routing kernel CLI. Project config: badpcb.json (cwd or --project); state in .badpcb/ (sessions, routes, cache; BADPCB_HOME overrides)")
+    ap = argparse.ArgumentParser(prog="badpcb", description="routing kernel CLI. Project config: badpcb.json (cwd or --project); state in .badpcb/ (sessions, work, cache; BADPCB_HOME overrides)")
     ap.add_argument("--project", default=None, metavar="PATH", help="badpcb.json (or the directory holding it); default: badpcb.json in the cwd or a parent, else $BADPCB_PROJECT, else defaults")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("report", help="print the topology report for a board file or a session")
@@ -623,7 +623,7 @@ def main(argv=None):
     x.add_argument("--no-verify", action="store_true")
     x = sub.add_parser("droute", help="detailed routing with KiCadRoutingTools: badpcb droute <session|board> [--nets ..] [--component R] [--region R8] [--preview] [--time S]")
     x.add_argument("target", help="session name or .kicad_pcb")
-    x.add_argument("--out", default=None, help="output board (default: <badpcb home>/routes/<name>_dr.kicad_pcb, chained by default)")
+    x.add_argument("--out", default=None, help="output board (default: <work dir>/droute/<name>/passN.kicad_pcb, chained by default)")
     x.add_argument("--nets", nargs="*", default=[])
     x.add_argument("--component", nargs="*", default=[])
     x.add_argument("--region", default=None, help="region handle (R8) or x0,y0,x1,y1 mm: route the nets with a pad inside")
@@ -679,13 +679,17 @@ def cmd_project(a):
     P = config.current()
     print("project file : %s" % (P.path or "(none: defaults; state under the cwd)"))
     print("project root : %s" % P.root)
-    print("state dir    : %s  (sessions, routes, cache)" % P.home)
+    print("state dir    : %s  (sessions, work, cache)" % P.home)
     print("board        : %s" % (P.board or "-"))
     print("rules project: %s" % (P.rules_pro or "(each board's own .kicad_pro)"))
     print("mcu          : %s    fine-pitch parts: %s" % (P.mcu or "-", ",".join(P.data.get("fine_pitch_parts") or []) or "(auto-detect)"))
     print("swap groups  : %s" % (", ".join(g["id"] for g in P.swaps()["groups"]) or "none"))
-    print("lock classes : %s" % (", ".join("%s=%s%s" % (k, os.path.basename(v[0]), "".join(" +" + f for f in ("protect", "trim") if P.lock_props(k)[f]))
-                                           for k, v in P.lock_classes().items()) or "none"))
+    lc = P.lock_classes()
+    if not lc:
+        print("lock classes : no lock classes (badpcb.json has no \"locks\"; all copper is free, `lock`/`unlock`/`trim` have nothing to act on)")
+    else:
+        print("lock classes : %s" % ", ".join("%s=%s%s%s" % (k, os.path.basename(v[0]), "".join(" +" + f for f in ("protect", "trim") if P.lock_props(k)[f]),
+                                               "" if os.path.exists(v[0]) else " (FILE MISSING: class is empty)") for k, v in lc.items()))
     print("intent       : %s" % (", ".join("%s %d" % (k, n) for k, n in sorted(__import__("collections").Counter(e["kind"] for e in P.intent().values()).items())) or "none"))
     from . import audit
     print("audit        : %s" % (" ".join("%s=%g%s" % (k, v, "*" if k in P.audit() else "") for k, v in audit.params().items()) + "   (* = overridden)"))
