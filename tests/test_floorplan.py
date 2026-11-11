@@ -118,5 +118,51 @@ class Floorplan(unittest.TestCase):
         self.assertIn("intent=", txt)
 
 
+class RegulatorLoop(unittest.TestCase):
+    """Only the regulator loop is measured: DVDD-style decaps on the output rail (the load's own) are not loop caps."""
+
+    def tearDown(self):
+        config.use({})
+
+    def board(self, cout_x=(32.0,)):
+        nets = ["VREG_LX", "+1V1", "+1V1", "s3", "s4", "s5", "s6", "s7", "s8", "s9"]
+        parts = [qfn("U1", 50, 25, nets)]
+        parts.append(part("L1", [P("1", (30, 10), "VREG_LX"), P("2", (31, 10), "+1V1")], (30.5, 10), half=(1.5, 1.0), value="3.3uH"))
+        for k, x in enumerate(cout_x):                                       # output cap(s) next to the inductor's +1V1 pad
+            parts.append(part("C%d" % (7 + k), [P("1", (x, 10), "+1V1"), P("2", (x + 1, 10), "GND")], (x + 0.5, 10), half=(0.8, 0.5), value="4.7u"))
+        for k, (x, y) in enumerate(((44, 5), (60, 6), (56, 44))):            # DVDD pin decaps scattered round the IC, 14-40 mm from L1
+            parts.append(part("C%d" % (30 + k), [P("1", (x, y), "+1V1"), P("2", (x + 1, y), "GND")], (x + 0.5, y), half=(0.8, 0.5), value="100n"))
+        return synth.board(parts, size=(100, 60))
+
+    def regs(self, bd, intent=None):
+        config.use({"intent": intent} if intent else {})
+        F = floorplan.analyse(A.World(bd), ["U1"], 8.0)
+        return {g["part"]: g for g in F["regs"]}
+
+    def test_rail_decaps_are_not_loop_caps(self):
+        g = self.regs(self.board())["L1"]
+        self.assertEqual([c["ref"] for c in g["caps"]], ["C7"])
+        self.assertFalse(any(c["far"] for c in g["caps"]))
+        self.assertEqual(g["rail_decaps"], {"+1V1": ["C30", "C31", "C32"]})
+        self.assertIn("rail decaps not counted", "\n".join(floorplan.text(floorplan.analyse(A.World(self.board()), ["U1"], 8.0))))
+
+    def test_far_output_cap_is_still_flagged(self):
+        g = self.regs(self.board(cout_x=(40.0,)))["L1"]                      # the only output cap is 8.5 mm from the inductor pad
+        c = {x["ref"]: x for x in g["caps"]}
+        self.assertTrue(c["C7"]["far"])
+
+    def test_second_output_cap_close_by_counts_far_one_does_not(self):
+        g = self.regs(self.board(cout_x=(32.0, 33.5)))["L1"]
+        self.assertEqual(sorted(c["ref"] for c in g["caps"]), ["C7", "C8"])
+
+    def test_declared_block_caps_count_even_far_ones(self):
+        bd = self.board()
+        g = self.regs(bd, {"blocks": {"vreg": {"parts": ["L1", "C7", "C32"]}}})["L1"]       # the author says C32 belongs to the loop
+        c = {x["ref"]: x for x in g["caps"]}
+        self.assertTrue(c["C32"]["far"])
+        self.assertNotIn("C30", c)
+        self.assertEqual(g["block"], "vreg")
+
+
 if __name__ == "__main__":
     unittest.main()

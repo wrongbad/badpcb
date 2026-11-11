@@ -324,8 +324,28 @@ def _links(F):
     return out
 
 
+REG_BLOCK_RX = re.compile(r"vreg|regulat|dcdc|buck|ldo|smps|psu|power", re.I)       # intent block names that declare a regulator loop
+REG_LOOP_NET_RX = re.compile(r"(^|_)(LX|SW|VREG|FB|BOOT|BST)|FB$", re.I)             # switch node / feedback / regulator-internal nets
+
+
+def _declared_loop(F, r):
+    """Parts of the declared regulator block (intent `blocks`, name like vreg/regulator/dcdc...) that contains `r`, else None."""
+    for blk in F["blocks"]:
+        it = getattr(blk, "item", None)
+        if blk.declared and it is not None and REG_BLOCK_RX.search(blk.name):
+            members = set(it["A"]) | set(blk.parts)
+            if r in members:
+                return members, blk.name
+    return None
+
+
 def _regulators(F):
-    """Regulator groups: every inductor and every regulator-looking IC with the caps on its nets and their distance to its pads on that net."""
+    """Regulator groups: every inductor and every regulator-looking IC with the capacitors of its LOOP and their distance to its pads.
+
+    Loop caps (only these are measured against REG_CAP_MM): caps declared in the regulator's intent block (`vreg`/regulator...), caps on the
+    switch-node / feedback / regulator-internal nets (LX, VREG_*, FB), and on each output rail the cap nearest the part (plus further caps within
+    REG_CAP_MM). Other caps on the output rail are the load's own decaps (e.g. DVDD pin decaps the reference puts anywhere around the IC): they are
+    not loop caps, and are listed as `rail_decaps` (not counted, not flagged)."""
     b, N = F["board"], F["N"]
     out = []
     for r, p in sorted(b.parts.items(), key=lambda kv: _nat(kv[0])):
@@ -333,15 +353,6 @@ def _regulators(F):
         ic = REG_RX.search(p.value or "") and N.is_ic(p) or (REG_RX.search(p.value or "") and len(p.pads) >= 3 and r.startswith("U"))
         if not (ind or ic):
             continue
-        caps = {}
-        for d in p.pads:
-            if not d.net or N.gnd(d.net):
-                continue
-            for q in N.pads.get(d.net, ()):
-                if q.ref.startswith("C") and q.ref != r and len(b.parts[q.ref].pads) <= 3 and any(N.gnd(x.net) for x in b.parts[q.ref].pads):
-                    dd = geom.dist(q.pos, d.pos)
-                    if q.ref not in caps or dd < caps[q.ref][0]:
-                        caps[q.ref] = (dd, d.net)
         host = None
         for d in p.pads:
             ics = [q for q in N.pads.get(d.net, ()) if q.ref != r and N.is_ic(b.parts[q.ref])] if d.net and not N.gnd(d.net) else []
@@ -349,11 +360,43 @@ def _regulators(F):
                 q = min(ics, key=lambda x: geom.dist(x.pos, d.pos))
                 host = (q.ref, geom.dist(q.pos, d.pos), d.net)
                 break
+        decl = _declared_loop(F, r)
+
+        def is_cap(q):
+            return q.ref.startswith("C") and q.ref != r and len(b.parts[q.ref].pads) <= 3 and any(N.gnd(x.net) for x in b.parts[q.ref].pads)
+        # candidate caps by net: nets of the part's own pads, plus regulator-internal nets of its host IC (VREG_AVDD, VREG_FB ...)
+        nets = {d.net: d.pos for d in p.pads if d.net and not N.gnd(d.net)}
+        if host:
+            for hd in b.parts[host[0]].pads:
+                if hd.net and not N.gnd(hd.net) and hd.net not in nets and REG_LOOP_NET_RX.search(hd.net):
+                    nets[hd.net] = min((d.pos for d in p.pads), key=lambda x: geom.dist(x, hd.pos))
+        caps, rail = {}, {}
+        for net, pos0 in nets.items():
+            loop_net = bool(REG_LOOP_NET_RX.search(net))
+            cs = []
+            for q in N.pads.get(net, ()):
+                if is_cap(q):
+                    ref_pad = min((d.pos for d in p.pads if d.net == net), key=lambda x: geom.dist(x, q.pos)) if any(d.net == net for d in p.pads) else pos0
+                    cs.append((geom.dist(q.pos, ref_pad), q.ref))
+            cs.sort()
+            for k, (dd, ref) in enumerate(cs):
+                in_decl = decl is not None and ref in decl[0]
+                if in_decl or loop_net or k == 0 or dd <= REG_CAP_MM:
+                    if ref not in caps or dd < caps[ref][0]:
+                        caps[ref] = (dd, net)
+                else:
+                    rail.setdefault(net, []).append(ref)
+        if decl:                                   # declared loop parts on other nets (input cap, AVDD filter cap): distance to the nearest pad of the part
+            for ref in decl[0]:
+                if ref in b.parts and ref not in caps and ref != r and ref.startswith("C") and len(b.parts[ref].pads) <= 3:
+                    caps[ref] = (min(geom.dist(b.parts[ref].pos, d.pos) for d in p.pads), "declared:" + decl[1])
         cs = sorted(caps.items(), key=lambda kv: kv[1][0])
         pts = [p.pos] + [b.parts[c].pos for c, _ in cs[:6]]
         span = math.hypot(max(x[0] for x in pts) - min(x[0] for x in pts), max(x[1] for x in pts) - min(x[1] for x in pts))
         out.append({"part": r, "value": p.value, "host": host[0] if host else None, "host_pin_mm": round(host[1], 1) if host else None, "host_net": host[2] if host else None,
-                    "caps": [{"ref": c, "net": n, "mm": round(d, 1), "far": d > REG_CAP_MM} for c, (d, n) in cs[:8]], "span": round(span, 1)})
+                    "block": decl[1] if decl else None,
+                    "caps": [{"ref": c, "net": n, "mm": round(d, 1), "far": d > REG_CAP_MM} for c, (d, n) in cs[:8]],
+                    "rail_decaps": {n: sorted(v, key=_nat) for n, v in rail.items()}, "span": round(span, 1)})
     return out
 
 
@@ -484,7 +527,9 @@ def text(F, name="", max_rows=12):
     for g in F["regs"][:3]:
         L.append("regulator %s %s%s: caps %s%s" % (
             g["part"], g["value"], (" (host %s, %s pad %.1f mm)" % (g["host"], g["host_net"], g["host_pin_mm"])) if g["host"] else "",
-            " ".join("%s %.1f%s" % (c["ref"], c["mm"], "!" if c["far"] else "") for c in g["caps"][:6]) or "none", "  span %.1f mm (! = beyond %g)" % (g["span"], REG_CAP_MM)))
+            " ".join("%s %.1f%s" % (c["ref"], c["mm"], "!" if c["far"] else "") for c in g["caps"][:6]) or "none",
+            "  span %.1f mm (! = beyond %g)%s%s" % (g["span"], REG_CAP_MM, ("; loop from block " + g["block"]) if g.get("block") else "",
+                                                     ("; rail decaps not counted: " + " ".join("%s:%s" % (n, ",".join(v)) for n, v in g["rail_decaps"].items())) if g.get("rail_decaps") else "")))
     return L
 
 
