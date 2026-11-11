@@ -16,8 +16,11 @@ Rules for the agent: never pass `--out`/`apply`/`stubs` targets next to the fina
 put your own helper scripts and chain logs in a `work/` or `scripts/` subfolder, not beside the board, and copy only the pass you accept to the final name.
 
 ```
-0 simplify -> 1 reference first -> 2 floorplan -> 3 draft placement -> 4 gate -> 5 route (scoped passes) -> 6 escalate upward, never patch
+0 simplify -> 1 reference first -> 2 floorplan -> 3 draft placement -> 4 gate -> 5 route (scoped passes) -> 5b polish (lint) -> 6 escalate upward, never patch
 ```
+
+Per-net routing preferences are soft too: `net_styles` in `badpcb.json` (via penalty, detour budget, nets to keep away from, differential pair + skew, reference plane,
+priority; styles stack, the stricter value wins; a net gets a style by name pattern or by KiCad netclass). `badpcb styles BOARD` shows the resolved style per net.
 
 Intents and reference layouts are **soft**: penalty weights only, no vetoes, no locks. Breaking a reference is allowed and often
 necessary; it just has to be visible (`intent=` in METRICS, audit INTENT findings, `floorplan`).
@@ -69,7 +72,8 @@ instead of ignoring it), floorplan shows no foreign block in a fan zone, no LONG
 by `intent rm` / a looser weight, so the next audit does not nag. This gate is the inner loop below.
 
 ## 5. Route in scoped passes
-Loop details in the next section. Order of scope: first the fine-pitch escape (`--fanout U1`), then the critical blocks, then buses, plane
+Loop details in the next section. Order of scope: first the **constrained nets** (`droute --priority`: every net whose style says `priority`, a `via_penalty >= 8` or a `pair`; routed alone, before any
+other signal copper, with a higher via cost, a higher turn cost and keep-away bands for `avoid`; add `--clean-board` to start from a work copy without other signal copper; the later passes see that copper as existing, it is not locked), then the fine-pitch escape (`--fanout U1`), then the critical blocks, then buses, plane
 nets last. Measure every pass with one yardstick (`badpcb droute <board> --measure`).
 
 ## 6. Escalate upward, do not patch
@@ -126,7 +130,10 @@ report -> feasibility -> audit -> fix (small!) -> groute score -> scoped droute 
 9. **Plane finalize last.** Plane nets (`--nets GND +3V3 +3V3A`) go through KRT's finalize and can rip signal escapes; run them
    before the final signal repair, check `badpcb report <board> --section planes` (0 unserved islands) and `python -m badpcb.stubs` only for stub vias
    with all signal copper fixed.
-10. **Finish.** `kicad-cli pcb drc --refill-zones` against the project rules (not the lowered ones KRT writes; droute restores ours),
+10. **Polish (once the board is routed, 0 open connections).** `badpcb lint <board>` ranks every signal net by an ugliness score (detour ratio, signal vias, jogs and bends, acute / 90 degree corners, layer-direction breaks, tracks over a split or gap of the adjacent reference plane, pair skew / gap variation, foreign copper in a fine-pitch part's escape zone, nets to avoid) with a handle per net (cut / ring / region) and the reason. Then
+    `badpcb droute <board> --polish 5 --time 900`: the 5 worst nets (a pair together) are ripped and rerouted one at a time with the rest of the board frozen, and a result is kept **only if** open connections do not increase, the DRC errors / unconnected items do not increase (`kicad-cli ... --refill-zones`), no other net's copper moved and that net's lint score improved; the log shows before/after per net. Writes `polished.kicad_pcb` (or `--out`).
+    **Bad lint on many nets is a placement problem, not a routing one**: when `lint` prints ESCALATE (a large share of the nets is bad, typically clustered at the same handle such as `U1-in`) more polish will not help; go back to step 2/3 (`audit --only ESCAPE,CHANNEL`, `floorplan`, move the part that owns the handle) instead of grinding.
+11. **Finish.** `kicad-cli pcb drc --refill-zones` against the project rules (not the lowered ones KRT writes; droute restores ours),
     DRC errors 0, unconnected 0, write `swaps_applied.md`.
 
 ## Rules of thumb

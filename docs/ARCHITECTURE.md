@@ -42,6 +42,9 @@ badpcb/
   state.py        State = model + applied actions + routes; snapshot/branch/revert/diff
   intent.py       design intent (soft penalties): selectors/roles, near/apart/edge/clear/block, reference drift; `penalty(world)` feeds engine metrics
   floorplan.py    `badpcb floorplan`: blocks (declared + automatic), block nets/crossings, connectors, escape-facing, long links
+  styles.py       net_styles (badpcb.json): parse, KiCad netclass reading (.kicad_pro), resolution + stacking per net, `badpcb styles`
+  lint.py         route lint: per-net ugliness metrics + weighted score + table (`badpcb lint`, `report --section lint`)
+  polish.py       `droute --polish N`: accept/reject loop (hooks injected; droute.polish_env wires KRT, kicad-cli and lint)
   groute.py       PathFinder negotiated-congestion global router on a coarse multilayer grid;
                   history costs -> blockage explanations, thrash counts
   droute.py       detailed routing = scoped KiCadRoutingTools (KRT) passes + badpcb-vocabulary report (see Phase 4 notes)
@@ -140,3 +143,13 @@ and legal.py verdict (read-only). `badpcb suggest S audit` returns the best fix 
 - **floorplan regulator check** (`_regulators`): loop caps only (declared `vreg`/regulator block, LX/VREG/FB nets, nearest cap on each output rail + any within `REG_CAP_MM`); other rail caps are listed as `rail decaps not counted`.
 - **droute**: `--repair` prints `repair scope WIDENED ...` when its nets/ends go beyond the request; passes record the cuts their open connections cross (`passes.jsonl` `cuts`),
   and `repair.cut_cycle` fires the ping-pong escalation when the same cut handle ('U1 ring S') keeps failing while the net names rotate.
+
+## Phase 10 notes (net styles, route lint, constrained-first, polish)
+- **styles.py**: `net_styles` is validated in `config.Project.net_styles()` (unknown keys rejected). A net is styled by name pattern or KiCad netclass (`net_settings.netclass_assignments` + `netclass_patterns` of the board's own `.kicad_pro`); stacking = stricter value per key
+  (max via_penalty, min detour_max / skew_mm, union avoid / pairs, OR flags). Soft only: nothing in styles is a veto.
+- **groute**: `GRouter(styles={net: NetStyle})` (`run()` loads badpcb.json's by default). Per net: via cost `via_cost + via_penalty`; length weight `1 + 2 (1.5 - detour_max) / 1.5` when `detour_max < 1.5`; `avoid` = extra cost `AVOID_COST x cell` on cells within one cell of the avoided nets' current copper (mutual).
+  With no styles the three per-net tables are empty and the search is the global-cost one, bit for bit (tests compare routes).
+- **lint.py**: reads only the board model (tracks, vias, pads, zone outlines, escape zones from `audit.escape_zones`); never fills. Bends = track-end nodes of degree 2 not on a pad / via; jogs = short segments between two bends; direction breaks vs the layer's dominant direction (H/V ratio > 1.5);
+  split / gap: samples every 0.5 mm along outer-layer tracks, zone under the sample = highest-priority zone covering it on the adjacent plane layer. Handles from `groute.Names` (cut > ring > region) at the worst feature. ESCALATE when >= 40 % (and >= 8) of the nets are bad.
+- **droute**: `style_krt_args` turns styles into KRT flags (`--via-cost` 75 + 10 x penalty, `--keep-away AGG:VICTIM:1.0`, priority: `--turn-cost 1500`). KRT capabilities used: `--via-cost`, `--turn-cost`, `--keep-away`, `--keep-input-copper`, env `KICAD_RIP_PREEXISTING=0` / `KICAD_FINALIZE_RIP=0`; not wired: `route_diff.py` (pairs),
+  `--length-match-group`, `--layer-costs`. `--priority` scopes the pass to the constrained nets (`--clean-board`: work copy without other signal copper); `--polish N` = `polish.polish` with the real hooks. `route_layers(board)` replaces `signal_layers()` for KRT when outer GND pours make every layer a "plane layer".

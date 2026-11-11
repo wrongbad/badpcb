@@ -9,6 +9,7 @@ The idea
 - **What-if before commit**: small typed, reversible actions (`move`, `rot`, `flip`, `swap`, `assign`, `via`, `reshape`, `unlock`, hints...) in sessions with undo/snapshot/branch/diff. `badpcb eval` scores candidates (delta of crossings, overflow, wirelength...) without applying them.
 - **Intent and floorplan**: `intent` in `badpcb.json` (soft near/apart/edge/clear/block constraints and reference layouts, scored as `intent=`), `badpcb floorplan` (blocks, fill, block-level crossings, what faces each fine-pitch IC side, long critical links).
 - **Explanations**: `badpcb audit` (placement linter with ranked, legality-checked fixes; its header names the board file, its mtime and its zone count so a stale board is obvious; detectors ESCAPE, CHANNEL, PLANE, ROLES, INTENT, ...), `badpcb plan` (joint placement of an IC's fan-zone intruders and role parts), global router (`badpcb groute`, PathFinder with blockage history) and `badpcb droute` (scoped KiCadRoutingTools passes reported as open connections with region/cut handles and the locked copper that blocks them).
+- **Net styles, route lint, polish**: `net_styles` in `badpcb.json` (soft per-net via penalty / detour budget / avoid / pair + skew / reference plane / priority, by name pattern or KiCad netclass), `badpcb styles` (resolved style per net), `badpcb lint` (per-net ugliness table: detour, vias, jogs, corners, direction breaks, plane splits, pair skew, escape-zone intrusions; weighted score, handle and reason per net), `droute --priority` (constrained nets first) and `droute --polish N` (rip and reroute the N worst nets, keep a result only if lint improves and open conns / DRC do not get worse).
 - **No KiCad in the loop**: badpcb reads and edits `.kicad_pcb` files itself (pure stdlib S-expression editor: lossless, only the touched tokens change). KiCad is only the sign-off tool (`kicad-cli`: DRC, zone refill, fab output).
 
 ## Requirements
@@ -107,7 +108,27 @@ Distances are courtyard-box gaps (box to box, or box to a pad point); every entr
   relative to the anchor). All are logged, undoable and part of `snapshot`/`branch` like hints. Entries from `badpcb.json` can be removed the same way.
 - `badpcb audit S --only INTENT`: one finding per violated entry (WARN; ERR once the weighted penalty reaches `audit.intent_err`, default 8), with
   compact fixes and their delta; unresolved selectors are NOTEs. `badpcb plan` adds 0.5 x the intent penalty of a candidate spot to its cost.
-- `examples/key_board/badpcb.json` has an intent for the case-study board (blocks mcu / vreg / flash / xtal from the RP2350 minimal design).
+- `examples/pcb_v2/badpcb.json` has an intent for the case-study board (blocks mcu / vreg / flash / xtal from the RP2350 minimal design).
+
+## Net styles, route lint and polish
+```json
+"net_styles": {
+  "usb_d":   {"match": ["USB_D*"], "pair": "USB_DP/USB_DN", "skew_mm": 0.5, "via_penalty": 8, "keep_ref_plane": true, "priority": true},
+  "vreg_lx": {"match": ["VREG_LX"], "via_penalty": 6, "detour_max": 1.3, "avoid": ["XIN", "XOUT", "ADC*"], "priority": true},
+  "power":   {"class": "Power", "via_penalty": 2}
+}
+```
+Keys: `match` (fnmatch globs / exact names), `class` (a KiCad netclass; read from the board's `.kicad_pro`: `net_settings.netclass_assignments` and `netclass_patterns`), `via_penalty` (extra via cost, mm of path like groute's `--via-cost`),
+`detour_max` (routed / direct length the net should stay under), `avoid` (net globs to keep away from), `pair` (`"P/N"`), `skew_mm`, `keep_ref_plane`, `priority`. A net gets a style by name **or** netclass; when several styles match they **stack** and the stricter value per key wins
+(max `via_penalty`, min `detour_max` / `skew_mm`, union of `avoid` / pairs, OR of the flags). Everything is soft: penalties and ranking, never a veto. No `net_styles` = nothing changes.
+- `badpcb styles BOARD [--json]`: the resolved style per net (and styles that matched nothing, and the nets the priority pass will take).
+- **groute** uses them per net: via cost = base + `via_penalty`, a tight `detour_max` weights path length up, `avoid` is a soft proximity cost around the other nets' copper (mutual).
+- `badpcb lint BOARD [--nets GLOB ..] [--top N] [--all] [--json]` (also `report --section lint`): for every routed signal net (plane nets, stitching vias and single-pad nets excluded) detour ratio, signal vias, jogs (segment < 3 x track width between two bends), bends per 10 mm, acute and 90 degree corners, layer-direction breaks (each layer's dominant direction is inferred from its copper),
+  tracks over a split or gap of the adjacent reference plane (outer layers vs the zone outlines of the plane layer next to them), pair skew / gap variation / uncoupled share, copper inside another fine-pitch part's escape zone, copper close to `avoid` nets. A weighted score per net (`DEFAULTS` in `badpcb/lint.py`, `"lint": {"weights": {...}}` in `badpcb.json`; the style scales it:
+  `via_penalty` -> via weight, `keep_ref_plane` -> splits x3, `priority` -> x1.5), a table sorted worst first with the reason and a handle (`C12` / `U1-in` / `R8`), the board total, and a verdict: few bad nets -> candidates for polish, many -> ESCALATE (placement problem).
+- `badpcb droute BOARD --priority [--clean-board] [--strip]`: constrained-first pass for the nets with `priority`, `via_penalty >= 8` or a `pair`. KRT has one via cost per run (no per-net option, `route.py --via-cost`), so the pass routes those nets alone with the strictest via cost (75 + 10 x via_penalty), `--turn-cost 1500` and `--keep-away` bands for `avoid`
+  (KRT also has `route_diff.py` for differential pairs; not wired in). A normal pass raises the via cost only if every net of its scope has a `via_penalty`.
+- `badpcb droute BOARD --polish N [--time S] [--out BOARD]`: on a routed board rip and reroute the N worst nets of the lint (a pair together), one at a time, rest frozen (`--keep-input-copper`, KRT's pre-existing-rip disabled); a candidate is kept only if open connections, DRC errors and unconnected items do not increase, no other net's copper changed and the net's lint score improved. `--time` is the total budget. Logged per net with before/after.
 
 ## Quickstart
 ```
@@ -125,7 +146,7 @@ badpcb droute out.kicad_pcb --measure        # METRICS line (badpcb + DRC)
 ```
 
 ## Command reference
-`report` `session new|ls|rm` `act` `eval` `suggest` `audit` `plan` `floorplan` `groute` `undo` `snapshot` `revert` `branch` `switch` `diff` `log` `spots` `show` `apply` `droute` `project`. `badpcb <cmd> -h` lists options; action syntax is in the docstring of `badpcb/actions.py`.
+`report` `lint` `styles` `session new|ls|rm` `act` `eval` `suggest` `audit` `plan` `floorplan` `groute` `undo` `snapshot` `revert` `branch` `switch` `diff` `log` `spots` `show` `apply` `droute` `project`. `badpcb <cmd> -h` lists options; action syntax is in the docstring of `badpcb/actions.py`.
 
 ## Typical agent loop
 Get the start right, then route: `0 simplify the architecture -> 1 reference first (intents + reference blocks) -> 2 floorplan (blocks before parts) -> 3 draft placement inside the blocks -> 4 gate (audit + intent) -> 5 route in scoped passes -> 6 escalate upward (re-floorplan) instead of patching`.

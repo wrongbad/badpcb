@@ -159,5 +159,56 @@
   "xtal_load_mm": 4.6,
   "decap_bulk_mm": 12.0,
   "pull_mm": 60.0
+ },
+ "net_styles": {
+  "_comment": "Soft per-net preferences (badpcb styles BOARD lists the resolved style per net). via_penalty >= 8, priority or a pair routes first in `droute --priority`.",
+  "usb_d": {
+   "match": [
+    "USB_D*"
+   ],
+   "pair": "USB_DP/USB_DN",
+   "skew_mm": 0.5,
+   "via_penalty": 8,
+   "keep_ref_plane": true,
+   "priority": true
+  },
+  "vreg_lx": {
+   "match": [
+    "VREG_LX"
+   ],
+   "via_penalty": 6,
+   "detour_max": 1.3,
+   "avoid": [
+    "XIN",
+    "XOUT",
+    "XOUT_R",
+    "ADC*"
+   ],
+   "priority": true
+  },
+  "xtal": {
+   "match": [
+    "XIN",
+    "XOUT",
+    "XOUT_R"
+   ],
+   "via_penalty": 10,
+   "detour_max": 1.3,
+   "keep_ref_plane": true,
+   "avoid": [
+    "VREG_LX",
+    "EN*"
+   ]
+  },
+  "adc": {
+   "match": [
+    "ADC*"
+   ],
+   "via_penalty": 3,
+   "avoid": [
+    "VREG_LX"
+   ],
+   "keep_ref_plane": true
+  }
  }
 }
