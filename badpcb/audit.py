@@ -18,6 +18,7 @@ existing copper ignored) is what the geometric detectors see, so they work the s
 import dataclasses
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -1822,12 +1823,34 @@ def _fmt_fix(f, fx, width=170):
     return s + tail
 
 
+def board_line(ac):
+    """'board: PATH (modified YYYY-MM-DD HH:MM:SS, N min ago), N zones (n netted fills, m rule areas)': makes a stale or wrong board obvious."""
+    st = ac.st
+    path = getattr(st, "board_path", None) or ac.b.source or "?"
+    try:
+        mt = os.path.getmtime(path)
+        ago = (time.time() - mt) / 60.0
+        when = "modified %s, %s ago" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mt)),
+                                       "%.0f min" % ago if ago < 120 else "%.1f h" % (ago / 60.0) if ago < 2880 else "%.1f d" % (ago / 1440.0))
+    except OSError:
+        when = "file not found"
+    nz = len(ac.b.zones)
+    nk = len(ac.b.keepouts)
+    zl = "%d zones (%d netted%s%s)" % (nz + nk, nz, ", %d rule areas" % nk if nk else "",
+                                       "; planes: " + " ".join(sorted(ac.b.plane_nets())) if nz else "")
+    return "board: %s (%s), %s" % (path, when, zl), (nz == 0)
+
+
 def text(rep, full=False, limit_lines=60):
     ac = rep.ac
     c = rep.counts()
     L = ["badpcb audit %s: %d finding(s) [%d ERR %d WARN %d NOTE], score %.0f  (%d what-ifs, %.1fs)%s" % (
         rep.name, len(rep.findings), c["ERR"], c["WARN"], c["NOTE"], rep.score, ac.n_eval, rep.wall,
         "  [%d open conns, %d locked tracks]" % (ac.base["unrouted"], sum(t.locked for t in ac.b.tracks)))]
+    bl, nozone = board_line(ac)
+    L.append(bl)
+    if nozone:
+        L.append("  note: no zones on this board: plane checks use planes.assume / guessed supply nets only")
     body = []
     for i, f in enumerate(rep.findings, 1):
         h = f.handles
@@ -1876,7 +1899,7 @@ def text(rep, full=False, limit_lines=60):
 
 
 def as_json(rep):
-    return {"name": rep.name, "score": round(rep.score, 1), "counts": dict(rep.counts()), "seconds": round(rep.wall, 1),
+    return {"name": rep.name, "board": board_line(rep.ac)[0], "score": round(rep.score, 1), "counts": dict(rep.counts()), "seconds": round(rep.wall, 1),
             "findings": [f.as_dict() for f in rep.findings],
             "groute": rep.groute}
 

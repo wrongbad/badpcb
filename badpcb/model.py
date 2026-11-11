@@ -130,12 +130,68 @@ class Board:
         """All pad objects of REF.num (a pad number can have several copper pieces, e.g. via pads)."""
         return [p for p in self.parts[ref].pads if p.num == str(num)]
 
+    def outline_area(self):
+        """Board outline area in mm2 (bounding box of the Edge.Cuts: the extract keeps only boxes of the outline shapes)."""
+        return max(1e-6, (self.bbox[2] - self.bbox[0]) * (self.bbox[3] - self.bbox[1]))
+
+    @staticmethod
+    def _zone_area(z):
+        from . import geom
+        a = 0.0
+        for zp in z.polys:
+            a += geom.poly_area(zp["outer"]) - sum(geom.poly_area(h) for h in zp.get("holes", []))
+        return max(a, 0.0)
+
+    def plane_layer_info(self, min_frac=None):
+        """{layer: {"area": mm2 of netted zone outlines, "frac": area / outline area, "zones": [(net, mm2)], "plane": bool}} for every layer
+        that carries a netted zone. Outlines, not fills: an unfilled zone counts. A layer is a plane layer when those zones cover more than
+        `min_frac` of the board outline (default: badpcb.json planes.min_coverage, 0.30), so a few-mm2 outer pour (regulator LX / +1V1 ring)
+        does not turn the layer into a plane (droute would then route single-layer)."""
+        if min_frac is None:
+            from . import config
+            min_frac = config.current().plane_min_coverage()
+        key = (min_frac, tuple((id(z), z.net, tuple(z.layers), tuple((id(zp), id(zp["outer"]), len(zp["outer"]), len(zp.get("holes", ()))) for zp in z.polys))
+                               for z in self.zones))
+        hit = self.__dict__.get("_pl_cache")
+        if hit and hit[0] == key:
+            return hit[1]
+        tot = self.outline_area()
+        info = {}
+        for z in self.zones:
+            if not z.net:
+                continue
+            a = self._zone_area(z)
+            for l in z.layers:
+                d = info.setdefault(l, {"area": 0.0, "zones": []})
+                d["area"] += a
+                d["zones"].append((z.net, a))
+        for l, d in info.items():
+            d["frac"] = d["area"] / tot
+            d["plane"] = d["frac"] > min_frac
+        self.__dict__["_pl_cache"] = (key, info)
+        return info
+
+    def plane_layer_report(self, min_frac=None):
+        """Text lines saying which netted zones made each layer a plane layer (or not)."""
+        info = self.plane_layer_info(min_frac)
+        out = []
+        for l in sorted(info, key=self.layers.index):
+            d = info[l]
+            byn = {}
+            for n, a in d["zones"]:
+                byn[n] = byn.get(n, 0.0) + a
+            zs = " ".join("%s %.0fmm2" % (n, a) for n, a in sorted(byn.items(), key=lambda kv: -kv[1]))
+            out.append("%s: %s (%.1f%% of the board, %s)" % (l, "PLANE layer" if d["plane"] else "not a plane layer (small pour, routed as signal)",
+                                                          100 * d["frac"], zs))
+        return out
+
     def plane_zones(self):
-        """Filled-copper zones with a net (plane layers are those that carry one)."""
-        return [z for z in self.zones if z.net]
+        """Netted zones on plane layers (see plane_layer_info): the copper that serves plane nets."""
+        pl = {l for l, d in self.plane_layer_info().items() if d["plane"]}
+        return [z for z in self.zones if z.net and set(z.layers) & pl]
 
     def plane_layers(self):
-        return sorted({l for z in self.plane_zones() for l in z.layers}, key=self.layers.index)
+        return sorted((l for l, d in self.plane_layer_info().items() if d["plane"]), key=self.layers.index)
 
     def plane_nets(self):
         return sorted({z.net for z in self.plane_zones()})

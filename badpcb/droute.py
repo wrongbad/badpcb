@@ -375,6 +375,8 @@ def main_args(a):
         "  PREVIEW (no board written)" if a.preview else ""))
     for n in note:
         print("  " + n)
+    for ln_ in board.plane_layer_report():
+        print("  plane layers: " + ln_)
     print("  before: unrouted conns %d, X=%d" % (m0["unrouted"], m0["crossings"]))
     if getattr(a, "strip", False):
         plane = set(board.plane_nets())

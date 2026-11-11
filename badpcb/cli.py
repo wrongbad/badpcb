@@ -84,11 +84,11 @@ def _nets(items, full, limit=16):
 def sec_summary(c, full):
     b, T, rn = c.board, c.T, c.rn
     m = T.metrics()
-    pl = ", ".join("%s:%s" % (l, "+".join(sorted({z.net for z in b.zones if l in z.layers}))) for l in b.plane_layers())
+    pl = ", ".join("%s:%s" % (l, "+".join(sorted({z.net for z in b.zones if z.net and l in z.layers}))) for l in b.plane_layers())
     nrt = len({x.net for x in rn.conns})
     L = ["board %.0fx%.0f mm, %d layers (signal %s; planes %s), rules clr %.2f w %.2f via %.2f/%.2f" % (
         b.width, b.height, len(b.layers), "/".join(b.signal_layers()), pl or "none", b.rules.clearance, b.rules.track_width,
-        b.rules.via_dia, b.rules.via_drill),
+        b.rules.via_dia, b.rules.via_drill)] + ["  plane decision, " + x for x in b.plane_layer_report()] + [
         "parts %d, pads %d, tracks %d (%d locked), vias %d, regions %d, cuts %d (+%d ring)" % (
             len(b.parts), sum(1 for _ in b.pads()), len(b.tracks), sum(t.locked for t in b.tracks), len(b.vias), len(T.regions),
             len([x for x in T.cuts.values() if not x.label]), len([x for x in T.cuts.values() if x.label])),
@@ -101,7 +101,8 @@ def sec_summary(c, full):
         from . import actions as _A, intent as _in
         w = getattr(c, "intent_world", None) or _A.World(b, c.cfg)
         ip, n = _in.penalty(w)
-        L[2] += " intent=%.1f" % ip
+        mi = next(i for i, x in enumerate(L) if x.startswith("METRICS"))
+        L[mi] += " intent=%.1f" % ip
         L.append("  intent = weighted penalty of %d declared intent(s) (0 = all met); details: badpcb audit --only INTENT, badpcb floorplan" % n)
     if c.assumed:
         L.append("  NOTE: board has no zones; assuming plane nets (excluded from routing, need only a via): " + " ".join(c.assumed))
