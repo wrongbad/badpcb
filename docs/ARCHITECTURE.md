@@ -72,7 +72,7 @@ Decision: no own detailed router. KRT is located by $KRT_DIR / $KRT_PY (or badpc
 - `python3 -m badpcb apply SESSION out.kicad_pcb` (plan and writer both in-process python3; the writer patches the board text, see `kicad_pcb.py`).
   Stored zone fills are dropped when anything changed (KiCad / `kicad-cli pcb drc --refill-zones` refill them). Writes `swaps_applied.md` beside the board.
 - `python3 -m badpcb droute SESSION|BOARD [--nets ..|--region R8|--component ..] [--fanout U1] [--grid mm|auto] [--time S] [--preview]`;
-  passes chain (.badpcb/routes/<session>/passNN.kicad_pcb, current.kicad_pcb). `--measure` prints the METRICS line of any board.
+  passes chain (.badpcb/work/droute/<session>/passN.kicad_pcb, current.kicad_pcb). `--measure` prints the METRICS line of any board.
 - Grading DRC always uses the ORIGINAL project rules (badpcb.json rules.project, else the input board's own .kicad_pro) (KRT lowers clearance/drill floors in the project it writes).
 - KRT runs with `--escalation board` (never below the board's minimums); KRT treats every KiCad-locked track as unrippable and
   protects those nets, so locked lanes/stubs are hard obstacles for it.
@@ -123,7 +123,20 @@ and legal.py verdict (read-only). `badpcb suggest S audit` returns the best fix 
 ## Project config and state (standalone badpcb)
 - `badpcb.json` (cwd or parent, `--project`, `$BADPCB_PROJECT`) holds board facts: rules project, mcu / fine-pitch parts, swap groups, lock classes + lane trim
   settings, plane hints, KRT location. No file: auto-detect fine-pitch parts, no groups, no classes.
-- State (`sessions/`, `routes/`, `cache/`) lives in `<project dir>/.badpcb/` or `$BADPCB_HOME`; session files store the board path relative to the project.
+- State (`sessions/`, `work/`, `cache/`) lives in `<project dir>/.badpcb/` or `$BADPCB_HOME`; session files store the board path relative to the project.
+- **Work directory**: every intermediate (droute pass boards and KRT logs, strip/repair/fanout copies, apply plan + report + DRC json, stub plans, extract dumps) is written under `config.work_dir(kind, id)` = `<state dir>/work/<kind>/<id>/` (`"work_dir"` in badpcb.json relocates it). Commands write only the final board they were asked for (+ its rules files, `swaps_applied.md`) outside it, so the board folder stays readable.
 - `-m badpcb.extract|apply --write|strip_nets` are plain python3 entry points, also called in-process (no subprocess, no `$KIPY`).
 - Flip/rotate emulate pcbnew (Flip about the origin + SetOrientation): the footprint keeps the requested angle, local y of all children is negated,
   pad angles are negated relative to the footprint, F./B. layers swap, `(justify mirror)` toggles. Verified against pcbnew 10 for 0/90/180/270.
+
+## Phase 9 notes (start-right respin fixes)
+- `audit` header: board path, mtime (age) and zone count (`board_line`), also in the JSON; a board without zones says so.
+- **CHANNEL** (`audit.detect_channel`): per fine-pitch side the corridor its fan leaves through = from the pad row outward `channel_depth_mm` (shortened toward where the nets go),
+  laterally between the nearest drilled holes / through pads / keepouts on each side of the pad row (at most `channel_widen_mm` past the outermost pads). Support passives on the
+  IC's board side inside it that are not in the IC's reference block (decap/regulator/crystal roles, members of intent blocks containing the IC, `clear` exceptions) are findings; severity from the share of the
+  corridor width they occupy. ESCAPE only looks 2-3 mm deep, ROLES only at distances, so on the v2 keyboard 8 RC parts in an 8.1 mm hole-to-hole channel passed both. Tunables: `audit.channel_*`.
+- **PLANE** judges a pad by its copper extent and the stub + via reach into the right zone (zone outlines; fills are never read), not by the pad centre.
+- **plane_layers** (`model.Board.plane_layer_info`): coverage of the board outline by netted zone outlines > `planes.min_coverage`; `plane_zones()` / `plane_nets()` only count zones on such layers.
+- **floorplan regulator check** (`_regulators`): loop caps only (declared `vreg`/regulator block, LX/VREG/FB nets, nearest cap on each output rail + any within `REG_CAP_MM`); other rail caps are listed as `rail decaps not counted`.
+- **droute**: `--repair` prints `repair scope WIDENED ...` when its nets/ends go beyond the request; passes record the cuts their open connections cross (`passes.jsonl` `cuts`),
+  and `repair.cut_cycle` fires the ping-pong escalation when the same cut handle ('U1 ring S') keeps failing while the net names rotate.

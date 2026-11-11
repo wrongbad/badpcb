@@ -9,6 +9,12 @@ Every later phase patched symptoms. So: **get the start right, then route**. Rou
 Run everything from the board project directory (where `badpcb.json` is) after `source scripts/krt_env.sh` (and
 `export PYTHONPATH=<badpcb checkout>` unless installed). Names such as U1, R20, ADC2 below are the case study's.
 
+**Keep the project top level readable.** It holds only: the final board (+ its `.kicad_pro` / `.kicad_dru`), `badpcb.json`, the notes and logs you write
+for humans (NOTES.md, WORKFLOW_LOG.md), and `fab/`. Everything else is an intermediate and goes in the nested work directory, which badpcb already uses by default
+(`.badpcb/work/<kind>/<id>/`: droute pass boards, strip/repair/fanout copies, KRT logs, apply plans and reports, stub plans, DRC json; relocate with `"work_dir"` in `badpcb.json`).
+Rules for the agent: never pass `--out`/`apply`/`stubs` targets next to the final board for experiments (write them to `.badpcb/work/<run>/` or the scratch area),
+put your own helper scripts and chain logs in a `work/` or `scripts/` subfolder, not beside the board, and copy only the pass you accept to the final name.
+
 ```
 0 simplify -> 1 reference first -> 2 floorplan -> 3 draft placement -> 4 gate -> 5 route (scoped passes) -> 6 escalate upward, never patch
 ```
@@ -54,8 +60,11 @@ what must be close: decaps at their pins, crystal and load caps, flash, the regu
 support jointly and now weighs intent too; `suggest S audit` ranks fixes with `intent` in the delta.
 
 ## 4. Gate: audit + intent clean enough before routing
-Run `badpcb report S --section summary` (METRICS with `intent=`), `badpcb audit S`, `badpcb floorplan S`. Go to routing when: no ERR
-finding in ESCAPE / PLANE / ROLES / INTENT / COURTYARD, WARN INTENT findings are consciously accepted (relax or remove the intent
+Run `badpcb report S --section summary` (METRICS with `intent=`), `badpcb audit S` (check its header: board path, mtime, zone count, so you know it read the board you think), `badpcb floorplan S`.
+Also look at the **escape corridors**: `badpcb audit S --only CHANNEL` finds the hole/keepout-free channel each fine-pitch side has to leave through and lists the support parts (pull-downs, RC filters,
+anything that is not the IC's own reference block) sitting in it. ESCAPE only sees the 2-3 mm fan zone and ROLES only distances, so these were all "legal" and still cost three failed chains on the v2 keyboard.
+Move them (pull-downs may sit anywhere on their net) or declare them (`blocks` / `clear.except`) and run `badpcb groute S --region <channel region> --time 20` as a cheap corridor score before routing.
+Go to routing when: no ERR finding in ESCAPE / CHANNEL / PLANE / ROLES / INTENT / COURTYARD, WARN INTENT findings are consciously accepted (relax or remove the intent
 instead of ignoring it), floorplan shows no foreign block in a fan zone, no LONG link. Breaking a reference on purpose is fine: say so
 by `intent rm` / a looser weight, so the next audit does not nag. This gate is the inner loop below.
 
@@ -65,7 +74,7 @@ nets last. Measure every pass with one yardstick (`badpcb droute <board> --measu
 
 ## 6. Escalate upward, do not patch
 If a region needs **more than about 2 repair passes**, or the **ping-pong warning** fires (the failure just moves between the same few
-nets), stop routing and go back to **step 2/3**: re-floorplan the block (rotate or move the MCU, move the connector, split the bus) or
+nets, or, keyed on the cut handle, the same cut such as `U1 ring S` keeps failing while the net names rotate), stop routing and go back to **step 2/3**: re-floorplan the block (rotate or move the MCU, move the connector, split the bus) or
 to **step 0/1** if the cause is the architecture or a reference you skipped. Another pass will not converge. Ask: which intent / which
 block made this region impossible, and why did the gate not catch it? Add that as an intent so it is caught next time.
 
@@ -84,7 +93,7 @@ report -> feasibility -> audit -> fix (small!) -> groute score -> scoped droute 
    (U1_FINE rule area 0.10/0.10 in torture2). No placement change fixes a rule problem.
 3. **Audit.** `badpcb audit S` (add `--roles` for inferred decap/filter-cap roles, `--full` for every finding, `--json` for tools).
    Read ERR findings top to bottom. ESCAPE = what blocks the fine-pitch fan (the right diagnosis in torture2: "U1.N blocked by
-   C24 C27 R20"), PLANE = supply pads over the wrong plane, ROLES = decaps/filter caps too far, INTENT = declared intents and reference
+   C24 C27 R20"), CHANNEL = support parts in the corridor the fan leaves through, PLANE = supply pads over the wrong plane (judged by pad copper extent and stub+via reach against zone outlines; unfilled zones count), ROLES = decaps/filter caps too far, INTENT = declared intents and reference
    drift, COURTYARD = DRC errors.
 4. **Fix small, one cause at a time.** What closed the last connection (board lane B3): move the *one* part sitting on the
    blocked pin's fan (R20, a series resistor, not the cap), pull the filter cap toward its pin (C26 11.3 -> 6.6 mm), then re-escape
@@ -111,7 +120,7 @@ report -> feasibility -> audit -> fix (small!) -> groute score -> scoped droute 
    (or `unlock lanes`, `unlock mimic`) before blaming the router. torture2: 65 -> 6 open conns came from unlocking lanes, not from placement.
 8. **Repair, don't restart.** Few open conns on a routed board: `badpcb droute S --repair [--radius 4] [--fanout U1]` rips only the
    unlocked copper within `radius` of the open ends and re-routes that group together. If the failure moves between the same few nets
-   (ping-pong warning) droute prints the next rung of the ladder: plain pass -> `--repair --nets <group>` -> `--strip --fanout U1
+   (ping-pong warning) droute prints the next rung of the ladder (and `--repair` prints `repair scope WIDENED ...` when it reaches beyond the nets/region you asked for): plain pass -> `--repair --nets <group>` -> `--strip --fanout U1
    --nets <group>` (re-escape the whole bundle together; this is what closed ADC2) -> **change the board** (step 6 above: floorplan,
    placement via `badpcb plan`, pin swap, unlock) because another pass will not converge.
 9. **Plane finalize last.** Plane nets (`--nets GND +3V3 +3V3A`) go through KRT's finalize and can rip signal escapes; run them
@@ -122,6 +131,9 @@ report -> feasibility -> audit -> fix (small!) -> groute score -> scoped droute 
 
 ## Rules of thumb
 
+* Reference copper: copy the vendor's small outer-layer pours (regulator LX, +1V1) if you like; a layer counts as a plane layer only when its netted zones cover > 30 % of the board
+  (`planes.min_coverage`), and `report --section summary` / `droute` print which zones decided. The floorplan's `regulator` line measures only loop caps
+  (declared `vreg` block, LX/VREG/FB nets, the output cap nearest the inductor); DVDD-style rail decaps are listed as "not counted".
 * Measure every step with one yardstick: `badpcb droute <board> --measure` -> `METRICS(droute) unrouted_conns=.. drc_err=.. unconnected=..`.
   For placement work look at the open conns of nets with a pad on the IC under study, not the board total (60 of 65 open conns in the
   U1 test were far-away locked SENSE/EN lanes that no U1 placement can move).

@@ -8,8 +8,8 @@ The idea
 - **Text and matrix views**: `badpcb report` prints the crossing matrix, cut demand/capacity, an ASCII congestion map, feasibility of the design rules against fine-pitch footprints, lock classes and plane service. Every report has a JSON form.
 - **What-if before commit**: small typed, reversible actions (`move`, `rot`, `flip`, `swap`, `assign`, `via`, `reshape`, `unlock`, hints...) in sessions with undo/snapshot/branch/diff. `badpcb eval` scores candidates (delta of crossings, overflow, wirelength...) without applying them.
 - **Intent and floorplan**: `intent` in `badpcb.json` (soft near/apart/edge/clear/block constraints and reference layouts, scored as `intent=`), `badpcb floorplan` (blocks, fill, block-level crossings, what faces each fine-pitch IC side, long critical links).
-- **Explanations**: `badpcb audit` (placement linter with ranked, legality-checked fixes), `badpcb plan` (joint placement of an IC's fan-zone intruders and role parts), global router (`badpcb groute`, PathFinder with blockage history) and `badpcb droute` (scoped KiCadRoutingTools passes reported as open connections with region/cut handles and the locked copper that blocks them).
-- **No KiCad in the loop**: badpcb reads and edits `.kicad_pcb` files itself (pure stdlib S-expression editor: lossless, only the touched tokens change). KiCad is only the sign-off tool (`kicad-cli`: DRC, zone refill, fab output). Board projects' own build scripts may still use `pcbnew`; badpcb does not need it.
+- **Explanations**: `badpcb audit` (placement linter with ranked, legality-checked fixes; its header names the board file, its mtime and its zone count so a stale board is obvious; detectors ESCAPE, CHANNEL, PLANE, ROLES, INTENT, ...), `badpcb plan` (joint placement of an IC's fan-zone intruders and role parts), global router (`badpcb groute`, PathFinder with blockage history) and `badpcb droute` (scoped KiCadRoutingTools passes reported as open connections with region/cut handles and the locked copper that blocks them).
+- **No KiCad in the loop**: badpcb reads and edits `.kicad_pcb` files itself (pure stdlib S-expression editor: lossless, only the touched tokens change). KiCad is only the sign-off tool (`kicad-cli`: DRC, zone refill, fab output).
 
 ## Requirements
 - Python 3.9+ (stdlib only; `numpy` optional).
@@ -30,10 +30,16 @@ source scripts/krt_env.sh                   # KRT_DIR / KRT_PY / KICAD_CLI defau
 | `KICAD_CLI` | kicad-cli | `kicad-cli` on PATH, else the macOS app bundle |
 | `KRT_DIR` / `KRT_PY` | KiCadRoutingTools checkout / its python | `badpcb.json` `krt`, else `~/KiCadRoutingTools` and `~/KiCadRoutingTools/.venv/bin/python` |
 | `BADPCB_PROJECT` | badpcb.json (or its directory) | badpcb.json in the cwd or a parent |
-| `BADPCB_HOME` | state directory | `<project dir>/.badpcb/` |
+| `BADPCB_HOME` | state directory (sessions, work files, cache) | `<project dir>/.badpcb/` |
 | `BADPCB_NO_CACHE`, `BADPCB_GSCORE_CELL`, `BADPCB_PROGRESS_S` | disable groute cache / groute-score cell mm / droute progress seconds | |
 
-State never goes into the package: `.badpcb/sessions`, `.badpcb/routes` (droute passes), `.badpcb/cache` (extracted models).
+State never goes into the package: `.badpcb/sessions`, `.badpcb/cache` (extracted models) and **`.badpcb/work/`**, the nested work directory for every intermediate artifact:
+```
+.badpcb/work/droute/<session|board>/passN.kicad_pcb, passN.krt.log/.json, passN.strip|repair|fanout.kicad_pcb, current.kicad_pcb, passes.jsonl
+.badpcb/work/apply/<out board stem>/plan.json, apply_report.json, drc_in.json, drc.json
+.badpcb/work/stubs/<out board stem>/   .badpcb/work/drc/   .badpcb/work/extract/
+```
+Only what you ask for lands elsewhere: the board named in `apply S out.kicad_pcb` / `droute --out` / `stubs in out` (with its `.kicad_pro`/`.kicad_dru`) and `swaps_applied.md` beside it. The directory is configurable (`"work_dir": "build/work"` in `badpcb.json`, relative to the project) so the project top level keeps only the final board, the config, notes and `fab/`.
 
 ## Project config: `badpcb.json`
 Found in the cwd (or a parent), via `--project PATH`, or `$BADPCB_PROJECT`. All keys optional; relative paths are relative to the file. Without one badpcb auto-detects fine-pitch parts and has no swap groups or lock classes.
@@ -48,7 +54,8 @@ Found in the cwd (or a parent), via `--project PATH`, or `$BADPCB_PROJECT`. All 
                         "mimic": {"file": "mimic.json", "key": "copied"}},
             "trim": {"nets": "^(EN|SENSE)\\d+$", "key_parts": "^U1\\d\\d$", "start_part": "U1"}},
   "audit": {"decap_bypass_mm": 4.0},
-  "planes": {"assume": ["GND", "+3V3"]},
+  "planes": {"assume": ["GND", "+3V3"], "min_coverage": 0.30},
+  "work_dir": ".badpcb/work",
   "intent": {"blocks": {"vreg": {"parts": ["L1", "C15", "C17"], "max_span_mm": 10}},
              "near": [["decaps:U1", "U1", 3]], "clear": [{"zone": "escape:U1", "except": ["decaps:U1"]}], "edge": [["J1", "back", 2]]},
   "krt": {"dir": "../tools/KiCadRoutingTools", "python": "../tools/krt-venv/bin/python"}
@@ -59,9 +66,10 @@ Found in the cwd (or a parent), via `--project PATH`, or `$BADPCB_PROJECT`. All 
 - `swaps`: file or inline dict `{"mcu", "pin_names": {pin: name}, "groups": [...]}`; group kinds `pin_permutation`, `pin_assignment`, `part_sets`, `key_assignment` (needs `net_regex`). See `examples/key_board/swaps.json`.
 - `locks.classes`: copper lock classes, none by default. Each is `"name": "file[:key]"` (JSON list of track/via uuids, or `d[key]`) or `{"file", "key", "protect", "trim"}`. `protect`: `apply` keeps the copper unless a changed pad shorts or breaks it, and `legal`/`stubs` treat it as hard copper. `trim`: eligible for `trim [CLASS]` (alias `trim-lanes`; all trim classes when no CLASS); it may be a dict that overrides `locks.trim` (`nets`, `key_parts`, `start_part`, `band_depth`) for that class. Output labels use the class name.
 - `audit`: overrides for the ROLES / escape-zone thresholds (decap, filter-cap, crystal, pull-up distances, slack factors, minimum IC pins, fan-zone depth, joint-placement limits). Defaults and meanings: `DEFAULTS` in `badpcb/audit.py`; unknown keys are rejected. `badpcb audit --roles` and `badpcb project` print the effective values.
-- `planes.assume`: nets treated as plane nets on boards with no zones yet.
+- `planes.assume`: nets treated as plane nets on boards with no zones yet. `planes.min_coverage` (default 0.30): a layer is a **plane layer** only when its netted zones (outlines, so unfilled zones count) cover more than this fraction of the board outline; a few-mm2 outer-layer pour (regulator LX / +1V1) does not make the layer a plane, so droute keeps routing on it. `report --section summary` and every `droute` pass print which zones made each decision (`0` = any netted zone, the old behaviour).
+- `work_dir`: nested work directory for intermediates (default `<state dir>/work`, see above).
 - `intent`: soft design intent, an inline object or the path of a JSON file; see **Design intent** below.
-`badpcb project` prints what was resolved.
+`badpcb project` prints what was resolved (`no lock classes` when there is no `locks` block; lock files that do not exist are flagged, not fatal).
 
 ## Design intent (`intent`)
 What the placement should look like, as **soft penalties only**: no vetoes, no rigid locks. A broken intent just costs and is reported;
