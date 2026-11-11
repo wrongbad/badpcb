@@ -141,7 +141,7 @@ report -> feasibility -> audit -> fix (small!) -> groute score -> scoped droute 
 * Reference copper: copy the vendor's small outer-layer pours (regulator LX, +1V1) if you like; a layer counts as a plane layer only when its netted zones cover > 30 % of the board
   (`planes.min_coverage`), and `report --section summary` / `droute` print which zones decided. The floorplan's `regulator` line measures only loop caps
   (declared `vreg` block, LX/VREG/FB nets, the output cap nearest the inductor); DVDD-style rail decaps are listed as "not counted".
-* Measure every step with one yardstick: `badpcb droute <board> --measure` -> `METRICS(droute) unrouted_conns=.. drc_err=.. unconnected=..`.
+* Measure every step with one yardstick: `badpcb droute <board> --measure` -> `METRICS(droute) unrouted_conns=.. drc_err=.. unconnected=..`; for how clean the copper is, `badpcb lint <board>` (total ugliness, bad nets).
   For placement work look at the open conns of nets with a pad on the IC under study, not the board total (60 of 65 open conns in the
   U1 test were far-away locked SENSE/EN lanes that no U1 placement can move).
 * Never land a part within ~1.5 mm of the board edge unless there is no alternative (`badpcb plan --edge`); never move a part without
